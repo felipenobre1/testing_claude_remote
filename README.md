@@ -131,6 +131,18 @@ The `interpret` call has to come first because the NPC must never see the raw in
 
   Attempts such as `update_fact` or `update_character`, unknown fields, or out-of-range values are rejected.
 
+### Real web pages
+
+If you share a link in a conversation ("check www.gradeeconomy.com"), the backend opens it once. The model never opens anything itself. The rules:
+
+- **Fetching:** http(s) only, no local/private addresses, a 10s timeout and a 1 MB limit.
+- **Storage:** the page is saved as a text snapshot in `documents`, linked to a `link_shared` event.
+- **Who sees it:** the event's observers are the people in the conversation. Only they see the page, under *WEB PAGES YOU HAVE OPENED* in their briefing.
+- **Later sessions:** they remember the page as it looked when they opened it, even if the site changes afterwards.
+- **Failures:** a page that fails to load is shown to them as "did not load" (with the reason).
+- **Not fetched:** links inside private thoughts are never opened.
+- **Turning it off:** set `STARTUP_FETCH=off` to disable fetching.
+
 ## SQLite schema
 
 | Table | Purpose |
@@ -146,6 +158,7 @@ The `interpret` call has to come first because the NPC must never see the raw in
 | `knowledge` | per-character beliefs keyed by `(character, topic)`: belief, confidence, source, source event |
 | `scenes` | current location, description, physically present characters, open interaction |
 | `interactions` | live-conversation bookkeeping (channel, participants, start/end). History stays in events. |
+| `documents` + `event_documents` | snapshots of real web pages shared in play; reachable only through an observed event |
 | `turns` | request id (unique once final), status, base/committed revision, stored response, full trace |
 
 ## Known limitations (Milestone 1)

@@ -1,6 +1,6 @@
 import type { Store } from '../db/store.ts';
 import type {
-  Channel, Character, Fact, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene, TranscriptLine,
+  Channel, Character, Fact, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene, TranscriptLine, WebDocument,
 } from '../domain/types.ts';
 import { formatGameTime, keywords, overlap } from './util.ts';
 
@@ -15,7 +15,7 @@ import { formatGameTime, keywords, overlap } from './util.ts';
 //      over the already-permitted rows.
 // ============================================================================
 
-export const LIMITS = { memories: 8, knowledge: 15, events: 6, conversationLines: 16 };
+export const LIMITS = { memories: 8, knowledge: 15, events: 6, conversationLines: 16, documents: 3, docCharsNow: 4000, docCharsEarlier: 800 };
 
 export interface Ranked<T> {
   item: T;
@@ -37,6 +37,7 @@ export interface NpcContextInput {
   gameTime: string;
   sceneLocation: string;
   pending?: PendingCharacter;
+  pendingDocuments?: WebDocument[]; // pages opened this turn (shared by the partner)
 }
 
 export interface NpcPerspective {
@@ -48,7 +49,8 @@ export interface NpcPerspective {
   events: Ranked<GameEvent>[];
   conversation: TranscriptLine[];
   conversationEventIds: string[];
-  permitted: { memories: number; knowledge: number; events: number; relationships: number };
+  documents: { doc: WebDocument; openedNow: boolean }[];
+  permitted: { memories: number; knowledge: number; events: number; relationships: number; documents: number };
 }
 
 function rank<T>(items: T[], score: (item: T, recency: number) => number, limit: number): Ranked<T>[] {
@@ -70,6 +72,7 @@ export function retrieveNpcPerspective(store: Store, input: NpcContextInput): Np
   const ownMemories = pending ? [] : store.listMemoriesOwnedBy(npc.id);
   const ownKnowledge = pending ? [] : store.listKnowledgeOf(npc.id);
   const observed = pending ? [] : store.listEventsObservedBy(npc.id);
+  const seenDocuments = pending ? [] : store.listDocumentsObservedBy(npc.id);
 
   const conversationEvents = observed.filter((e) => input.interactionId && e.interactionId === input.interactionId);
   const pastEvents = observed.filter((e) => !(input.interactionId && e.interactionId === input.interactionId));
@@ -96,6 +99,12 @@ export function retrieveNpcPerspective(store: Store, input: NpcContextInput): Np
     if (!toward) continue;
     if (r.toCharacterId === partnerId || overlap(query, toward.name) > 0) relationships.push({ relationship: r, towardName: toward.name });
   }
+  // Pages: the ones opened this turn in full, then the most recent earlier ones (shorter).
+  const nowDocs = input.pendingDocuments ?? [];
+  const earlierDocs = seenDocuments.filter((d) => !nowDocs.some((n) => n.url === d.url)).reverse();
+  const documents = [...nowDocs.map((doc) => ({ doc, openedNow: true })), ...earlierDocs.map((doc) => ({ doc, openedNow: false }))]
+    .slice(0, LIMITS.documents);
+
   relationships.sort((a, b) => Number(b.relationship.toCharacterId === partnerId) - Number(a.relationship.toCharacterId === partnerId));
 
   return {
@@ -107,7 +116,11 @@ export function retrieveNpcPerspective(store: Store, input: NpcContextInput): Np
     events,
     conversation,
     conversationEventIds: conversationEvents.map((e) => e.id),
-    permitted: { memories: ownMemories.length, knowledge: ownKnowledge.length, events: pastEvents.length, relationships: ownRelationships.length },
+    documents,
+    permitted: {
+      memories: ownMemories.length, knowledge: ownKnowledge.length, events: pastEvents.length,
+      relationships: ownRelationships.length, documents: seenDocuments.length,
+    },
   };
 }
 
@@ -122,6 +135,7 @@ export function perspectiveTrace(p: NpcPerspective) {
     knowledge: p.knowledge.map((k) => ({ id: k.item.id, score: k.score, topic: k.item.topic })),
     events: p.events.map((e) => ({ id: e.item.id, score: e.score, summary: e.item.summary })),
     conversationEventIds: p.conversationEventIds,
+    documents: p.documents.map((d) => ({ id: d.doc.id, url: d.doc.url, status: d.doc.status, openedNow: d.openedNow })),
   };
 }
 
@@ -177,11 +191,23 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
     'WHAT YOU KNOW OR BELIEVE (topic key: belief)',
     list(p.knowledge.map((k) => `${k.item.topic}: ${k.item.belief} (confidence ${k.item.confidence}; ${k.item.source})`)),
     '',
+    'WEB PAGES YOU HAVE OPENED (exactly as they looked when you opened them)',
+    p.documents.length ? p.documents.map((d) => renderDocument(d.doc, d.openedNow)).join('\n\n') : '(none)',
+    '',
     'CURRENT CONVERSATION (latest last)',
     p.conversation.map((l) => line(l, npc)).join('\n') || '(nothing yet)',
     '',
     `Respond now as ${npc.name}.`,
   ].join('\n');
+}
+
+function renderDocument(d: WebDocument, openedNow: boolean): string {
+  const when = openedNow ? 'you just opened it' : `opened ${short(d.gameTime)}`;
+  const head = `### ${d.finalUrl}${d.title ? ` — "${d.title}"` : ''} (${when})`;
+  if (d.status === 'error') return `${head}\nThe page did not load for you (${d.error}).`;
+  const limit = openedNow ? LIMITS.docCharsNow : LIMITS.docCharsEarlier;
+  const text = d.text.length > limit ? `${d.text.slice(0, limit)}\n[…page continues]` : d.text;
+  return `${head}\n${text || '(the page is essentially empty)'}`;
 }
 
 // ---------------------------------------------------------------------------

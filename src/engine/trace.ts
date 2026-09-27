@@ -38,6 +38,7 @@ export interface Trace {
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
   retrieval?: ReturnType<typeof perspectiveTrace>;
+  documents?: { id: string; url: string; finalUrl: string; status: string; title: string | null; chars: number; error: string | null }[];
   npcOutput?: NpcTurnEnvelope;
   validation?: { attempt: number; proposals: unknown[]; accepted: AcceptedChange[]; rejected: Rejection[] }[];
   writes?: WriteRecord[];

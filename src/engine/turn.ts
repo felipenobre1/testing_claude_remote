@@ -5,7 +5,7 @@ import {
   type InterpretResult, type NpcTurnEnvelope,
 } from '../domain/schemas.ts';
 import type {
-  Character, Game, GameEvent, Interaction, Relationship, Scene, TranscriptLine, TurnResponse,
+  Character, Game, GameEvent, Interaction, Relationship, Scene, TranscriptLine, TurnResponse, WebDocument,
 } from '../domain/types.ts';
 import type { LLMProvider, LLMTask } from '../llm/provider.ts';
 import {
@@ -17,6 +17,7 @@ import { GENERATE_SYSTEM_PROMPT, generateUserPrompt, interpretSystemPrompt, npcS
 import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 import { validateChanges, validateCharacterProposal, type AcceptedChange, type Rejection } from './validate.ts';
+import { extractUrls, type PageFetcher } from './web.ts';
 
 export interface TurnRequest {
   gameId: string;
@@ -46,6 +47,7 @@ interface WritePlan {
   interactionsToInsert: Interaction[];
   interactionsToEnd: { id: string; gameTime: string }[];
   events: GameEvent[];
+  documents: { doc: WebDocument; eventId: string }[];
   changes: { change: AcceptedChange; sourceEventId: string; gameTime: string; channel: string }[];
   scene: Scene;
   newGameTime: string;
@@ -55,11 +57,14 @@ export class Engine {
   readonly store: Store;
   readonly llm: LLMProvider;
   private now: () => string;
+  private fetcher: PageFetcher | null;
 
-  constructor(store: Store, llm: LLMProvider, opts: { now?: () => string } = {}) {
+  /** `fetcher`: how shared links are opened. null = links are heard but never opened. */
+  constructor(store: Store, llm: LLMProvider, opts: { now?: () => string; fetcher?: PageFetcher | null } = {}) {
     this.store = store;
     this.llm = llm;
     this.now = opts.now ?? (() => new Date().toISOString());
+    this.fetcher = opts.fetcher ?? null;
   }
 
   newGame(opts: NewGameOptions = {}) {
@@ -151,7 +156,7 @@ export class Engine {
     const location = interp.newLocation ?? pp.scene.location;
     const scene: Scene = { ...pp.scene, location, activeCharacterIds: [...pp.scene.activeCharacterIds], updatedAt: now };
     const plan: WritePlan = {
-      newCharacter: null, interactionsToInsert: [], interactionsToEnd: [], events: [], changes: [], scene, newGameTime: t1,
+      newCharacter: null, interactionsToInsert: [], interactionsToEnd: [], events: [], documents: [], changes: [], scene, newGameTime: t1,
     };
     const event = (e: Omit<GameEvent, 'id' | 'gameId' | 'turnId' | 'createdAt' | 'location'> & { location?: string | null }): GameEvent => {
       const ev: GameEvent = { id: newId('evt'), gameId: game.id, turnId: trace.turnId, createdAt: now, location, ...e };
@@ -237,9 +242,11 @@ export class Engine {
       }
       if (interp.spokenText) pendingLines.push({ speakerId: player.id, speakerName: player.name, text: interp.spokenText });
       if (endRequested) pendingLines.push({ speakerId: null, speakerName: null, text: `${player.name} is wrapping up the ${label(interaction.channel)}.` });
+      // Links the player shares are opened by the backend and shown to the people who received them.
+      const pendingDocuments = await this.openSharedLinks(trace, plan, game, player, target, interaction, interp.spokenText, t1);
       const ctxInput: NpcContextInput = {
         npcId: target.id, partner: player, channel: interaction.channel, interactionId: startedNew ? null : interaction.id,
-        pendingLines, gameTime: t1, sceneLocation: location, pending,
+        pendingLines, gameTime: t1, sceneLocation: location, pending, pendingDocuments,
       };
       const perspective = retrieveNpcPerspective(store, ctxInput);
       trace.retrieval = perspectiveTrace(perspective);
@@ -329,9 +336,17 @@ export class Engine {
         store.insertInteraction(i);
         w('interactions', 'insert', i.id);
       }
+      for (const { doc } of plan.documents) {
+        store.insertDocument(doc);
+        w('documents', 'insert', doc.id, `${doc.status} ${doc.url}`);
+      }
       for (const e of plan.events) {
         store.insertEvent(e);
         w('events', 'insert', e.id, `${e.type}; observers=${e.observers.map((o) => o.characterId).join(',')}`);
+      }
+      for (const { doc, eventId } of plan.documents) {
+        store.linkEventDocument(eventId, doc.id);
+        w('event_documents', 'insert', `${eventId}→${doc.id}`);
       }
       for (const i of plan.interactionsToEnd) {
         store.endInteraction(i.id, i.gameTime);
@@ -384,6 +399,31 @@ export class Engine {
         committedRevision: revision, playerInput: input, response, trace, createdAt: now,
       });
     });
+  }
+
+  private async openSharedLinks(
+    trace: Trace, plan: WritePlan, game: Game, player: Character, target: Character, interaction: Interaction,
+    spokenText: string | null, gameTime: string,
+  ): Promise<WebDocument[]> {
+    const urls = spokenText ? extractUrls(spokenText) : [];
+    if (!urls.length || !this.fetcher) return [];
+    const pages = await Promise.all(urls.map((u) => this.fetcher!.fetch(u)));
+    const now = this.now();
+    const docs: WebDocument[] = pages.map((p) => ({
+      id: newId('doc'), gameId: game.id, url: p.url, finalUrl: p.finalUrl, status: p.status, title: p.title, text: p.text,
+      error: p.error, fetchedAt: now, gameTime, createdAt: now,
+    }));
+    const summary = `${player.name} shared ${docs.map((d) => d.url).join(' and ')} with ${target.name}.`;
+    const ev: GameEvent = {
+      id: newId('evt'), gameId: game.id, turnId: trace.turnId, interactionId: interaction.id, gameTime, type: 'link_shared', summary,
+      transcript: [], importance: 2, location: plan.scene.location, createdAt: now,
+      participants: [{ characterId: player.id, role: 'actor' }, { characterId: target.id, role: 'addressee' }],
+      observers: interaction.participantIds.map((id) => ({ characterId: id, channel: interaction.channel })),
+    };
+    plan.events.push(ev);
+    for (const doc of docs) plan.documents.push({ doc, eventId: ev.id });
+    trace.documents = docs.map((d) => ({ id: d.id, url: d.url, finalUrl: d.finalUrl, status: d.status, title: d.title, chars: d.text.length, error: d.error }));
+    return docs;
   }
 
   private async generateCharacter(trace: Trace, game: Game, player: Character, everyone: Character[], name: string, relationHint: string | null): Promise<PendingCharacter> {

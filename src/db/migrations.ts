@@ -177,4 +177,26 @@ export const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX turns_request_final ON turns(game_id, request_id)
     WHERE status IN ('committed', 'clarification');
   `,
+
+  /* v2 — real web pages shared in play, snapshotted when first seen */ `
+  CREATE TABLE documents (
+    id          TEXT PRIMARY KEY,
+    game_id     TEXT NOT NULL REFERENCES games(id),
+    url         TEXT NOT NULL,
+    final_url   TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('ok', 'error')),
+    title       TEXT,
+    text        TEXT NOT NULL,              -- readable text snapshot (truncated)
+    error       TEXT,
+    fetched_at  TEXT NOT NULL,              -- real-world time of the fetch
+    game_time   TEXT NOT NULL,              -- game time at which it was opened
+    created_at  TEXT NOT NULL
+  );
+  -- A document reaches a character only through an event they observed.
+  CREATE TABLE event_documents (
+    event_id    TEXT NOT NULL REFERENCES events(id),
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    PRIMARY KEY (event_id, document_id)
+  );
+  `,
 ];

@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { MIGRATIONS } from './migrations.ts';
 import type {
   Character, Fact, Game, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene,
-  TurnRow, TurnStatus, TurnResponse,
+  TurnRow, TurnStatus, TurnResponse, WebDocument,
 } from '../domain/types.ts';
 
 type Row = Record<string, any>;
@@ -289,6 +289,28 @@ export class Store {
     return { op: 'insert', id: k.id };
   }
 
+  // ---------- documents (web page snapshots) ----------
+  insertDocument(d: WebDocument): void {
+    this.run(
+      `INSERT INTO documents (id, game_id, url, final_url, status, title, text, error, fetched_at, game_time, created_at)
+       VALUES (:id, :gameId, :url, :finalUrl, :status, :title, :text, :error, :fetchedAt, :gameTime, :createdAt)`,
+      { ...d },
+    );
+  }
+  linkEventDocument(eventId: string, documentId: string): void {
+    this.run('INSERT OR IGNORE INTO event_documents (event_id, document_id) VALUES (:e, :d)', { e: eventId, d: documentId });
+  }
+  /** Perspective query: ONLY documents shown to this character through an event they observed. */
+  listDocumentsObservedBy(characterId: string): WebDocument[] {
+    return this.all(
+      `SELECT DISTINCT d.* FROM documents d
+       JOIN event_documents ed ON ed.document_id = d.id
+       JOIN event_observers o ON o.event_id = ed.event_id
+       WHERE o.character_id = :c ORDER BY d.game_time, d.rowid`,
+      { c: characterId },
+    ).map(mapDocument);
+  }
+
   // ---------- turns ----------
   getFinalTurnByRequest(gameId: string, requestId: string): TurnRow | undefined {
     const r = this.get(
@@ -394,6 +416,12 @@ function mapKnowledge(r: Row): Knowledge {
     id: r.id, gameId: r.game_id, characterId: r.character_id, topic: r.topic, belief: r.belief, confidence: r.confidence,
     aboutCharacterId: r.about_character_id, factId: r.fact_id, source: r.source, sourceEventId: r.source_event_id,
     gameTime: r.game_time, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function mapDocument(r: Row): WebDocument {
+  return {
+    id: r.id, gameId: r.game_id, url: r.url, finalUrl: r.final_url, status: r.status, title: r.title, text: r.text,
+    error: r.error, fetchedAt: r.fetched_at, gameTime: r.game_time, createdAt: r.created_at,
   };
 }
 function mapTurn(r: Row): TurnRow {

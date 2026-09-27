@@ -12,6 +12,7 @@ import { Store } from '../src/db/store.ts';
 import type { Trace } from '../src/engine/trace.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { OpenAIProvider } from '../src/llm/openai.ts';
+import { HttpPageFetcher } from '../src/engine/web.ts';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/provider.ts';
 
 if (!process.env.OPENAI_API_KEY) {
@@ -52,7 +53,7 @@ const MONEY = /2[.,]?500|two and a half|duemilacinquecento|10[.,]?000/i;
 async function session(label: string, inputs: string[], gameId?: string) {
   const store = new Store(dbPath);
   const llm = new Recording(new OpenAIProvider());
-  const engine = new Engine(store, llm);
+  const engine = new Engine(store, llm, { fetcher: new HttpPageFetcher() });
   let id = gameId;
   if (!id) {
     const g = engine.newGame();

@@ -38,6 +38,10 @@ export function formatTurn(store: Store, gameId: string, which: string, full = f
       `events:    ${r.events.map((e) => `\n  ${e.id} score=${e.score}  ${e.summary}`).join('') || '(none)'}`,
       `current conversation events: ${r.conversationEventIds.join(', ') || '(new conversation)'}`);
   }
+  if (t.documents?.length) {
+    out.push(h('SHARED LINKS OPENED'), ...t.documents.map((d) =>
+      `  ${d.id} ${d.status} ${d.finalUrl}${d.title ? ` "${d.title}"` : ''} ${d.status === 'ok' ? `(${d.chars} chars)` : `— ${d.error}`}`));
+  }
   for (const c of t.llmCalls) {
     out.push(h(`LLM CALL ${c.task} (attempt ${c.attempt}, model ${c.model ?? '-'})`));
     if (full) out.push('[system]', c.system, '');
@@ -69,6 +73,8 @@ export function formatCharacter(store: Store, gameId: string, name: string): str
     ...store.listMemoriesOwnedBy(c.id).map((m) => `  ${m.id} [imp ${m.importance}, emo ${m.emotionalWeight}, ${m.gameTime}] ${m.summary}`));
   out.push(h('KNOWLEDGE (owned)'),
     ...store.listKnowledgeOf(c.id).map((k) => `  ${k.id} ${k.topic} (conf ${k.confidence}; ${k.source}): ${k.belief}`));
+  out.push(h('WEB PAGES SEEN'),
+    ...store.listDocumentsObservedBy(c.id).map((d) => `  ${d.id} [${d.gameTime}] ${d.status} ${d.finalUrl}${d.title ? ` "${d.title}"` : ''}`));
   out.push(h('EVENTS OBSERVED'),
     ...store.listEventsObservedBy(c.id).map((e) => `  ${e.id} [${e.gameTime}] ${e.type}: ${e.summary}`));
   return out.join('\n');

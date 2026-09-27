@@ -10,7 +10,8 @@ export type EventType =
   | 'conversation_turn'
   | 'conversation_ended'
   | 'action'
-  | 'private_thought';
+  | 'private_thought'
+  | 'link_shared';
 
 export interface Game {
   id: string;
@@ -126,6 +127,21 @@ export interface Knowledge {
   gameTime: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Snapshot of a real web page as it was when a character opened it. */
+export interface WebDocument {
+  id: string;
+  gameId: string;
+  url: string;
+  finalUrl: string;
+  status: 'ok' | 'error';
+  title: string | null;
+  text: string;
+  error: string | null;
+  fetchedAt: string;
+  gameTime: string;
+  createdAt: string;
 }
 
 export interface Scene {

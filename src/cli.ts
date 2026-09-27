@@ -4,6 +4,7 @@ import { Store } from './db/store.ts';
 import { formatCharacter, formatContext, formatEvents, formatFacts, formatStatus, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
+import { HttpPageFetcher } from './engine/web.ts';
 
 const USAGE = `Startup — Milestone 1
 
@@ -47,7 +48,8 @@ function inspect(store: Store, gameId: string, args: string[], full: boolean): s
 
 function liveEngine(store: Store): Engine | null {
   try {
-    return new Engine(store, new OpenAIProvider());
+    const fetcher = process.env.STARTUP_FETCH === 'off' ? null : new HttpPageFetcher();
+    return new Engine(store, new OpenAIProvider(), { fetcher });
   } catch (e) {
     console.error(`Cannot start live play: ${(e as Error).message}`);
     process.exitCode = 1;
