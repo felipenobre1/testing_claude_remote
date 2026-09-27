@@ -223,7 +223,8 @@ export class Engine {
 
     // 5. NPC turn — from the NPC's restricted perspective.
     let npcOut: NpcTurnEnvelope | null = null;
-    const endRequested = intents.has('end_conversation');
+    // "I hang up and call Sofia": the old call was already ended by the switch above.
+    const endRequested = intents.has('end_conversation') && !startedNew;
     const npcShouldRespond = target && interaction && (startedNew || Boolean(interp.spokenText));
     if (npcShouldRespond && target && interaction) {
       const pendingLines: TranscriptLine[] = [];
@@ -462,11 +463,10 @@ const label = (channel: string) => (channel === 'phone' ? 'call' : channel === '
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
 const sameName = (a: string, b: string) => norm(a) === norm(b) || norm(a).split(' ')[0] === norm(b).split(' ')[0];
 
-/** Exact full-name match first, then first-name match. */
+/** Exact full-name match; a bare first name ("Marco") also matches by first name. */
 export function findByName(characters: Character[], name: string): Character[] {
   const n = norm(name);
   const exact = characters.filter((c) => norm(c.name) === n);
-  if (exact.length) return exact;
-  const first = n.split(' ')[0];
-  return characters.filter((c) => norm(c.name).split(' ')[0] === first);
+  if (exact.length || n.includes(' ')) return exact;
+  return characters.filter((c) => norm(c.name).split(' ')[0] === n);
 }
