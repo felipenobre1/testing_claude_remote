@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { Store } from '../src/db/store.ts';
 import { formatStatusLine } from '../src/debug/inspect.ts';
+import { companyRepo } from '../src/packs/startup/company.ts';
 import type { Trace } from '../src/engine/trace.ts';
 import type { LLMRequest } from '../src/llm/provider.ts';
 import { fixedRng, interp, lastPrompt, MATTEO, MATTEO_KEEN, npc, openSession, seedDecisionState, SOFIA, tmpDbPath } from './helpers.ts';
@@ -30,7 +31,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
       .enqueue('npc_turn', npc({ dialogue: 'Pronto?' }))
       .enqueue('interpret', interp({
         ...onPhoneWithMatteo, intents: ['speak', 'general_action'], spokenText: 'Hold on, buying the domain right now.', minutesElapsed: 10,
-        actions: [{ action: 'pay', amountEur: 12, description: 'domain gradeeconomy.com', fromCompanyName: null, recurringMonthly: false }],
+        actions: [{ action: 'pay', amount: 12, description: 'domain gradeeconomy.com', fromEntityName: null, recurringMonthly: false }],
       }))
       .enqueue('npc_turn', npc({ dialogue: 'lol ok' }));
     await s1.engine.takeTurn({ gameId, input: 'I call Matteo' });
@@ -46,17 +47,17 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     s1.llm
       .enqueue('interpret', interp({
         ...onPhoneWithMatteo, intents: ['speak', 'general_action'], spokenText: "Done. Grade Economy exists now, I put 500 in.",
-        actions: [{ action: 'found_company', name: 'Grade Economy', description: 'Grades as salary: financial literacy for schools', initialInvestmentEur: 500 }],
+        actions: [{ action: 'found_company', name: 'Grade Economy', description: 'Grades as salary: financial literacy for schools', initialInvestment: 500 }],
       }))
       .enqueue('npc_turn', npc({ dialogue: 'Serious?' }));
     const r = await s1.engine.takeTurn({ gameId, input: 'I found Grade Economy and put €500 in' });
     assert.equal(r.status, 'committed', r.error ?? '');
-    const company = s1.store.listCompanies(gameId)[0]!;
+    const company = companyRepo.list(s1.store, gameId)[0]!;
     companyId = company.id;
     assert.equal(company.productStage, 'idea');
     assert.equal(cash(), 198_800);
-    assert.equal(s1.store.getAccountOf(gameId, 'company', companyId)!.balanceCents, 50_000);
-    assert.deepEqual(s1.store.listShareholdings(companyId).map((h) => [h.characterId, h.shares]), [[player.id, 1_000_000]]);
+    assert.equal(s1.store.getAccountOf(gameId, 'entity', companyId)!.balanceCents, 50_000);
+    assert.deepEqual(companyRepo.holdings(s1.store, companyId).map((h) => [h.characterId, h.shares]), [[player.id, 1_000_000]]);
   });
 
   await t.test('offer Matteo 40%; the engine resolves his decision; shares are issued (60/40)', async () => {
@@ -64,8 +65,8 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     s1.llm
       .enqueue('interpret', interp({
         ...onPhoneWithMatteo, spokenText: 'Be my cofounder. 40% of Grade Economy.',
-        actions: [{ action: 'make_offer', toCharacterName: 'Matteo Ferrari', kind: 'join_company', companyName: 'Grade Economy', equityPercent: 40,
-          salaryMonthlyEur: null, priceMonthlyEur: null, amountEur: null, role: 'cofounder', description: 'Be my cofounder' }],
+        actions: [{ action: 'make_offer', toCharacterName: 'Matteo Ferrari', kind: 'join_company', subject: 'Grade Economy', label: 'cofounder',
+          terms: [{ key: 'equityPercent', value: 40 }], description: 'Be my cofounder' }],
       }))
       .enqueue('npc_appraise', { factors: [
         { factor: 'trust', value: 2, reason: 'known Felipe for years' },
@@ -76,7 +77,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
         expressedDecision: 'accept',
         dialogue: 'Ok. I\'m in. But weekends only until exams are over.',
         importance: 5,
-        changes: [{ op: 'make_promise', description: 'Write the landing page copy', amountEur: null, dueInDays: 3 }],
+        changes: [{ op: 'make_promise', description: 'Write the landing page copy', amount: null, dueInDays: 3 }],
       }));
     const r = await s1.engine.takeTurn({ gameId, input: 'I offer Matteo 40% as cofounder' });
     assert.equal(r.status, 'committed', r.error ?? '');
@@ -85,9 +86,9 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     assert.match(prompt, /YOUR DECISION \(already settled — express it\)\n.*\nOutcome: accept/);
     assert.match(prompt, /company cash: €500\.00 · owners: Felipe 100\.0% \(founder\)/);
 
-    const holdings = s1.store.listShareholdings(companyId);
+    const holdings = companyRepo.holdings(s1.store, companyId);
     assert.deepEqual(holdings.map((h) => [h.characterId, h.shares]), [[player.id, 1_000_000], [matteoId, 666_667]]);
-    assert.equal(s1.store.getCompany(companyId)!.totalShares, 1_666_667);
+    assert.equal(companyRepo.get(s1.store, companyId)!.totalShares, 1_666_667);
     assert.match(r.text, /✓ Matteo Ferrari joined Grade Economy as cofounder · ownership: Felipe 60\.0%, Matteo Ferrari 40\.0%/);
     assert.match(r.text, /✓ Promise recorded — Matteo Ferrari → Felipe: Write the landing page copy by/);
     const joined = s1.store.listEvents(gameId).find((e) => e.type === 'decision')!;
@@ -99,14 +100,14 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
       .enqueue('interpret', interp({
         ...onPhoneWithMatteo, spokenText: "I'll pay you back the €100 for the logo by Friday. And I set up hosting on the company card.",
         actions: [
-          { action: 'pay', amountEur: 10, description: 'hosting', fromCompanyName: 'Grade Economy', recurringMonthly: true },
-          { action: 'make_promise', toCharacterName: 'Matteo', description: 'Pay back €100 for the logo', amountEur: 100, dueInDays: 5 },
+          { action: 'pay', amount: 10, description: 'hosting', fromEntityName: 'Grade Economy', recurringMonthly: true },
+          { action: 'make_promise', toCharacterName: 'Matteo', description: 'Pay back €100 for the logo', amount: 100, dueInDays: 5 },
         ],
       }))
       .enqueue('npc_turn', npc({ dialogue: 'deal' }));
     const r = await s1.engine.takeTurn({ gameId, input: '...' });
     assert.equal(r.status, 'committed', r.error ?? '');
-    assert.equal(s1.store.getAccountOf(gameId, 'company', companyId)!.balanceCents, 49_000);
+    assert.equal(s1.store.getAccountOf(gameId, 'entity', companyId)!.balanceCents, 49_000);
     assert.equal(s1.store.listRecurringPayments(gameId)[0]!.nextDueGameTime.slice(0, 10), '2026-10-27');
     assert.equal(s1.store.listObligations(gameId).filter((o) => o.status === 'open').length, 2);
   });
@@ -114,7 +115,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
   await t.test('you cannot spend money you do not have — a game outcome, not an error', async () => {
     const before = cash();
     s1.llm
-      .enqueue('interpret', interp({ ...onPhoneWithMatteo, spokenText: 'Buying a car for the company!', actions: [{ action: 'pay', amountEur: 30_000, description: 'a car', fromCompanyName: null, recurringMonthly: false }] }))
+      .enqueue('interpret', interp({ ...onPhoneWithMatteo, spokenText: 'Buying a car for the company!', actions: [{ action: 'pay', amount: 30_000, description: 'a car', fromEntityName: null, recurringMonthly: false }] }))
       .enqueue('npc_turn', npc({ dialogue: 'with what money??' }));
     const r = await s1.engine.takeTurn({ gameId, input: 'I buy a car for €30,000' });
     assert.equal(r.status, 'committed');
@@ -128,7 +129,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     const r = await s1.engine.takeTurn({ gameId, input: 'so we are good?' });
     assert.equal(r.status, 'failed');
     assert.match(JSON.stringify((s1.store.lastTurn(gameId)!.trace as Trace).validation), /Offers are resolved by the decision engine/);
-    assert.equal(s1.store.getCompany(companyId)!.totalShares, 1_666_667);
+    assert.equal(companyRepo.get(s1.store, companyId)!.totalShares, 1_666_667);
     s1.close();
   });
 
@@ -137,8 +138,8 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
 
   await t.test('session 2: balances, ownership, expenses and promises are exactly as left', () => {
     assert.equal(cash(s2.store), 198_800);
-    assert.equal(s2.store.getAccountOf(gameId, 'company', companyId)!.balanceCents, 49_000);
-    assert.deepEqual(s2.store.listShareholdings(companyId).map((h) => h.shares), [1_000_000, 666_667]);
+    assert.equal(s2.store.getAccountOf(gameId, 'entity', companyId)!.balanceCents, 49_000);
+    assert.deepEqual(companyRepo.holdings(s2.store, companyId).map((h) => h.shares), [1_000_000, 666_667]);
     assert.match(formatStatusLine(s2.store, gameId), /Grade Economy 60\.0% · €490\.00 · idea · 2 promises/);
   });
 
@@ -153,7 +154,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     assert.equal(s2.store.getScene(gameId).interactionId, null, 'no one stays on the phone for a week');
     assert.match(r.text, /⚠ Overdue since .*Matteo Ferrari → Felipe: Write the landing page copy/);
     assert.match(r.text, /⚠ Overdue since .*Felipe → Matteo Ferrari: Pay back €100 for the logo/);
-    assert.equal(s2.store.getCompany(companyId)!.productStage, 'prototype');
+    assert.equal(companyRepo.get(s2.store, companyId)!.productStage, 'prototype');
     const overdue = s2.store.listEvents(gameId).filter((e) => e.type === 'promise_overdue');
     assert.equal(overdue.length, 2);
     assert.ok(overdue.every((e) => e.observers.some((o) => o.characterId === matteoId)));
@@ -163,7 +164,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     for (let i = 0; i < 4; i++) s2.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 10080, narration: 'Another week goes by.' }));
     for (let i = 0; i < 4; i++) await s2.engine.takeTurn({ gameId, input: 'another week of work' });
     assert.equal(s2.store.getGame(gameId)!.gameTime.slice(0, 10), '2026-11-01');
-    assert.equal(s2.store.getAccountOf(gameId, 'company', companyId)!.balanceCents, 48_000);
+    assert.equal(s2.store.getAccountOf(gameId, 'entity', companyId)!.balanceCents, 48_000);
     assert.equal(s2.store.listRecurringPayments(gameId)[0]!.nextDueGameTime.slice(0, 10), '2026-11-27');
   });
 
@@ -183,7 +184,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     await s2.engine.takeTurn({ gameId, input: 'I call Sofia' });
     const s = lastPrompt(s2.llm, 'npc_turn');
     assert.doesNotMatch(s, /Grade Economy|€480|logo|OVERDUE/);
-    assert.match(s, /YOUR COMPANIES, OFFERS AND PROMISES \(exact figures, kept by the game\)\n\(none\)/);
+    assert.match(s, /YOUR AFFAIRS: HOLDINGS, OFFERS AND PROMISES \(exact figures, kept by the game\)\n\(none\)/);
   });
 
   await t.test('keeping a promise moves the money and closes it', async () => {
@@ -213,7 +214,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
 test('a paid action replayed with the same request id is charged once', async () => {
   const s = openSession(tmpDbPath());
   const { game, player } = s.engine.newGame();
-  s.llm.enqueue('interpret', interp({ intents: ['general_action'], actions: [{ action: 'pay', amountEur: 50, description: 'laptop stand', fromCompanyName: null, recurringMonthly: false }] }));
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], actions: [{ action: 'pay', amount: 50, description: 'laptop stand', fromEntityName: null, recurringMonthly: false }] }));
   await s.engine.takeTurn({ gameId: game.id, input: 'buy a stand', requestId: 'r1' });
   const again = await s.engine.takeTurn({ gameId: game.id, input: 'buy a stand', requestId: 'r1' });
   assert.equal(again.replayed, true);
@@ -232,8 +233,8 @@ test('offers and promises need the other person to be in the conversation', asyn
     .enqueue('interpret', interp({
       intents: ['general_action'],
       actions: [
-        { action: 'found_company', name: 'Grade Economy', description: 'edtech', initialInvestmentEur: 0 },
-        { action: 'make_offer', toCharacterName: 'Matteo', kind: 'join_company', companyName: 'Grade Economy', equityPercent: 30, salaryMonthlyEur: null, priceMonthlyEur: null, amountEur: null, role: 'cofounder', description: 'join me' },
+        { action: 'found_company', name: 'Grade Economy', description: 'edtech', initialInvestment: 0 },
+        { action: 'make_offer', toCharacterName: 'Matteo', kind: 'join_company', subject: 'Grade Economy', label: 'cofounder', terms: [{ key: 'equityPercent', value: 30 }], description: 'join me' },
       ],
     }));
   await s.engine.takeTurn({ gameId: game.id, input: 'call Matteo' });
@@ -248,8 +249,8 @@ test('migration: an existing Milestone 1 save gets a real account from its cash 
   const path = tmpDbPath();
   const db = new DatabaseSync(path);
   db.exec('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
-  for (const [i, sql] of MIGRATIONS.slice(0, 2).entries()) {
-    db.exec(sql);
+  for (const [i, m] of MIGRATIONS.slice(0, 2).entries()) {
+    db.exec(typeof m === 'string' ? m : m.sql);
     db.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(i + 1, 'x');
   }
   db.exec(`INSERT INTO games VALUES ('g1','t','Europe/Rome','2026-09-27T09:14','p1',3,'x','x');

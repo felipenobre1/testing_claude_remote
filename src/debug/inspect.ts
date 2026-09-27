@@ -3,7 +3,9 @@ import { renderNpcBriefing, retrieveNpcPerspective, type NpcContextInput } from 
 import type { Trace } from '../engine/trace.ts';
 import { findByName } from '../engine/turn.ts';
 import { formatGameTime, truncate } from '../engine/util.ts';
-import { describeOffer, eur, pct } from '../engine/economy.ts';
+import { formatMoney as formatMoney2 } from '../engine/planner.ts';
+import type { GamePack } from '../packs/types.ts';
+import { startupPack } from '../packs/startup/index.ts';
 
 // Plain-text views over canonical state and turn traces, for the CLI.
 
@@ -67,6 +69,14 @@ export function formatTurn(store: Store, gameId: string, which: string, full = f
       `base ${r.base} + factors ${r.weighted} = ${r.preRoll} · roll ${r.roll >= 0 ? '+' : ''}${r.roll} (seed ${r.seed}) → ${r.finalScore} → leans "${r.scoreOutcome}" → OUTCOME "${r.outcome}"`,
       'reasons:', ...r.reasons.map((x) => `  ${x}`));
   }
+  if (t.world && (t.world.scheduled.length || t.world.threads.length || t.world.deferred.length || t.world.director)) {
+    const w = t.world;
+    out.push(h(`WORLD TURN ${w.from} → ${w.to}`),
+      ...w.scheduled.map((x) => `  scheduled ${x.kind} (${x.due}): ${x.result}`),
+      ...w.threads.map((x) => `  thread "${x.title}": momentum ${x.momentumBefore} +${x.gain} → ${x.momentumAfter}${x.resolved ? ` · RESOLVED ${x.resolved.outcome} (score ${x.resolved.score}, roll ${x.resolved.roll})` : ''}`),
+      ...w.deferred.map((x) => `  deferred decision on ${x.offerId}: ${x.outcome} (roll ${x.roll})`),
+      ...(w.director ? [`  director: accepted ${w.director.accepted.join(', ') || 'nothing'}`, ...w.director.rejected.map((r) => `    rejected ${r.item}: ${r.reason}`)] : []));
+  }
   if (t.economy && (t.economy.actions.length || t.economy.results.length)) {
     out.push(h('MECHANICS (deterministic)'), `proposed actions: ${JSON.stringify(t.economy.actions)}`,
       ...t.economy.results.map((r) => `  ${r}`), ...t.economy.actionErrors.map((e) => `  model error: ${e}`));
@@ -121,24 +131,40 @@ export function formatEvents(store: Store, gameId: string): string {
   ).join('\n') || '(no events)';
 }
 
-export function formatMoney(store: Store, gameId: string): string {
+export function formatMoney(store: Store, gameId: string, pack: GamePack = startupPack): string {
   const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
-  const companies = new Map(store.listCompanies(gameId).map((c) => [c.id, c.name]));
+  const money = (c: number) => formatMoney2(c, pack.currency.symbol);
   const owner = (acctId: string | null) => {
     if (!acctId) return 'outside world';
     const a = store.getAccount(acctId)!;
-    return a.ownerKind === 'company' ? companies.get(a.ownerId)! : names.get(a.ownerId)!;
+    if (a.ownerKind === 'character') return names.get(a.ownerId)!;
+    return pack.entityLabel?.(store, a.ownerId) ?? `entity ${a.ownerId}`;
   };
-  const out = [h('ACCOUNTS'), ...store.listAccounts(gameId).map((a) => `  ${owner(a.id).padEnd(24)} ${eur(a.balanceCents)}`)];
-  out.push(h('COMPANIES'));
-  for (const c of store.listCompanies(gameId)) {
-    out.push(`  ${c.name} (${c.productStage}, founded ${c.foundedGameTime}, ${c.totalShares} shares) — ${c.description}`,
-      ...store.listShareholdings(c.id).map((s) => `    ${names.get(s.characterId)} ${s.shares} shares = ${pct(s.shares, c.totalShares)} (${s.role})`));
+  const out = [h('ACCOUNTS')];
+  // Entity names come from the pack's own view (it knows what its entities are called).
+  const packView = pack.inspect?.(store, gameId) ?? '';
+  out.push(...store.listAccounts(gameId).map((a) => `  ${owner(a.id).padEnd(28)} ${money(a.balanceCents)}`));
+  if (packView) out.push('', packView);
+  out.push(h('OFFERS'), ...store.listOffers(gameId).map((o) => `  ${o.id} ${names.get(o.fromCharacterId)} → ${names.get(o.toCharacterId)}: ${o.kind} ${JSON.stringify(o.terms)}${o.label ? ` as ${o.label}` : ''} — ${o.status}${o.lastOutcome ? ` (last: ${o.lastOutcome})` : ''}${o.parentOfferId ? ` counter of ${o.parentOfferId}` : ''}`));
+  out.push(h('PROMISES'), ...store.listObligations(gameId).map((o) => `  ${o.id} ${names.get(o.debtorId)} → ${names.get(o.creditorId)}: ${o.description}${o.amountCents ? ` (${money(o.amountCents)})` : ''}${o.dueGameTime ? ` due ${o.dueGameTime}` : ''} — ${o.status}`));
+  out.push(h('RECURRING'), ...store.listRecurringPayments(gameId).map((r) => `  ${owner(r.fromAccountId)} → ${owner(r.toAccountId)}: ${r.description} ${money(r.amountCents)}/month, next ${r.nextDueGameTime}${r.active ? '' : ' (stopped)'}`));
+  out.push(h('LEDGER'), ...store.listTransactions(gameId).map((t) => `  [${t.gameTime}] ${money(t.amountCents).padStart(12)}  ${owner(t.fromAccountId)} → ${owner(t.toAccountId)}  ${t.description}`));
+  return out.join('\n');
+}
+
+/** Story threads and the world schedule — world truth (debug only; the player never sees this in play). */
+export function formatWorld(store: Store, gameId: string): string {
+  const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
+  const out = [h('STORY THREADS (world truth)')];
+  for (const t of store.listThreads(gameId)) {
+    out.push(`  ${t.id} "${t.title}" — ${t.status}, momentum ${t.momentum}/100, urgency ${t.urgency}/day, ${t.visibility}`,
+      `    ${t.summary}`,
+      `    participants: ${t.participantIds.map((id) => names.get(id)).join(', ')} · caused by: ${t.causeEventIds.join(', ')}`,
+      `    ${names.get(t.resolution.actorId)} is weighing: ${t.resolution.option} [${t.resolution.domain}]`,
+      ...t.resolution.factors.map((f) => `      ${f.factor} ${f.value >= 0 ? '+' : ''}${f.value}: ${f.reason}`),
+      ...(t.outcome ? [`    OUTCOME: ${t.outcome}`] : []));
   }
-  out.push(h('OFFERS'), ...store.listOffers(gameId).map((o) => `  ${o.id} ${names.get(o.fromCharacterId)} → ${names.get(o.toCharacterId)}: ${describeOffer(o, companies.get(o.companyId ?? '') ?? '?')} — ${o.status}${o.lastOutcome ? ` (last: ${o.lastOutcome})` : ''}${o.parentOfferId ? ` counter of ${o.parentOfferId}` : ''}`));
-  out.push(h('PROMISES'), ...store.listObligations(gameId).map((o) => `  ${o.id} ${names.get(o.debtorId)} → ${names.get(o.creditorId)}: ${o.description}${o.amountCents ? ` (${eur(o.amountCents)})` : ''}${o.dueGameTime ? ` due ${o.dueGameTime}` : ''} — ${o.status}`));
-  out.push(h('RECURRING'), ...store.listRecurringPayments(gameId).map((r) => `  ${owner(r.fromAccountId)} → ${owner(r.toAccountId)}: ${r.description} ${eur(r.amountCents)}/month, next ${r.nextDueGameTime}${r.active ? '' : ' (cancelled)'}`));
-  out.push(h('LEDGER'), ...store.listTransactions(gameId).map((t) => `  [${t.gameTime}] ${eur(t.amountCents).padStart(12)}  ${owner(t.fromAccountId)} → ${owner(t.toAccountId)}  ${t.description}`));
+  out.push(h('WORLD SCHEDULE'), ...store.listScheduled(gameId).map((i) => `  ${i.id} ${i.dueGameTime} ${i.kind} ${i.status}${i.threadId ? ` (thread ${i.threadId})` : ''} ${JSON.stringify(i.payload)}`));
   return out.join('\n');
 }
 
@@ -147,7 +173,7 @@ export function formatDecisions(store: Store, gameId: string): string {
   const out = [h('DECISION STATES (hidden from the player)')];
   for (const d of store.listDecisionStates(gameId)) out.push(`  ${names.get(d.characterId)} — ${d.domain} [${d.source}]`, ...JSON.stringify(d.state, null, 2).split('\n').map((l) => `    ${l}`));
   out.push(h('RESOLVED DECISIONS'));
-  for (const d of store.listDecisions(gameId)) out.push(`  [${d.gameTime}] ${names.get(d.characterId)} on ${d.offerId}: ${d.outcome} (score ${d.finalScore}, roll ${d.roll >= 0 ? '+' : ''}${d.roll})`, ...d.reasons.map((r) => `      ${r}`));
+  for (const d of store.listDecisions(gameId)) out.push(`  [${d.gameTime}] ${names.get(d.characterId)} on ${d.offerId ?? `thread ${d.threadId}`} (${d.domain}): ${d.outcome} (score ${d.finalScore}, roll ${d.roll >= 0 ? '+' : ''}${d.roll})`, ...d.reasons.map((r) => `      ${r}`));
   return out.join('\n');
 }
 
@@ -157,7 +183,7 @@ export function formatFacts(store: Store, gameId: string): string {
 }
 
 /** One-line game HUD, built only from canonical state: time · place · cash · companies · promises · conversation. */
-export function formatStatusLine(store: Store, gameId: string): string {
+export function formatStatusLine(store: Store, gameId: string, pack: GamePack = startupPack): string {
   const game = store.getGame(gameId)!;
   const me = game.playerCharacterId;
   const scene = store.getScene(gameId);
@@ -165,12 +191,9 @@ export function formatStatusLine(store: Store, gameId: string): string {
   const parts = [
     formatGameTime(game.gameTime).replace(/^(\w{3})\w*,? (\d+) (\w{3})\w* \d{4}/, '$1 $2 $3'),
     scene.location.replace(/, Milan$/, ''),
-    eur(store.getAccountOf(gameId, 'character', me)?.balanceCents ?? 0),
+    formatMoney2(store.getAccountOf(gameId, 'character', me)?.balanceCents ?? 0, pack.currency.symbol),
+    ...pack.statusParts(store, gameId, me),
   ];
-  for (const c of store.listCompaniesOf(me)) {
-    const mine = store.listShareholdings(c.id).find((h) => h.characterId === me)!;
-    parts.push(`${c.name} ${pct(mine.shares, c.totalShares)} · ${eur(store.getAccountOf(gameId, 'company', c.id)?.balanceCents ?? 0)} · ${c.productStage}`);
-  }
   const open = store.listObligationsInvolving(me).filter((o) => o.status === 'open');
   const overdue = open.filter((o) => o.dueGameTime && o.dueGameTime <= game.gameTime).length;
   if (open.length) parts.push(`${open.length} promise${open.length > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`);

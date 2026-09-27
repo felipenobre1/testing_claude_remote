@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { Store } from './db/store.ts';
-import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
+import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatWorld, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
@@ -44,14 +44,16 @@ function inspect(store: Store, gameId: string, args: string[], full: boolean): s
     case 'facts': return formatFacts(store, gameId);
     case 'money': return formatMoney(store, gameId);
     case 'decisions': return formatDecisions(store, gameId);
-    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts | money | decisions';
+    case 'world': return formatWorld(store, gameId);
+    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts | money | decisions | world';
   }
 }
 
 function liveEngine(store: Store): Engine | null {
   try {
     const fetcher = process.env.STARTUP_FETCH === 'off' ? null : new HttpPageFetcher();
-    return new Engine(store, new OpenAIProvider(), { fetcher });
+    // The Story Director runs during world turns (at most one model call per game day). STARTUP_DIRECTOR=off disables it.
+    return new Engine(store, new OpenAIProvider(), { fetcher, director: process.env.STARTUP_DIRECTOR !== 'off' });
   } catch (e) {
     console.error(`Cannot start live play: ${(e as Error).message}`);
     process.exitCode = 1;

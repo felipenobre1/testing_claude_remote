@@ -11,7 +11,7 @@ export function tmpDbPath(): string {
 }
 
 /** A "session": fresh store + provider + engine on an existing (or new) database file. */
-export function openSession(path: string, opts: { rng?: (seed: string) => () => number } = {}) {
+export function openSession(path: string, opts: { rng?: (seed: string) => () => number; director?: boolean } = {}) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
   const engine = new Engine(store, llm, opts);
@@ -101,7 +101,8 @@ export const MATTEO_KEEN: DecisionState = {
   goals: ['Do something that matters alongside university'],
   pressures: [],
   alternatives: [{ text: 'keep studying and working weekends at the hardware shop', strength: 0.2 }],
-  hardConstraints: [],
+  limits: [],
+  requiresApproval: null,
   criteria: [
     { factor: 'trust', weight: 2, note: 'trusts Felipe' },
     { factor: 'offer_quality', weight: 2, note: 'a fair stake' },

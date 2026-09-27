@@ -4,7 +4,8 @@ export type Channel = 'phone' | 'in_person' | 'message';
 export type ObserverChannel = Channel | 'self';
 export type ParticipantRole = 'actor' | 'addressee' | 'mentioned';
 
-export type EventType =
+/** Engine event types. Game packs may add their own (e.g. "company_founded"). */
+export type CoreEventType =
   | 'game_started'
   | 'conversation_started'
   | 'conversation_turn'
@@ -13,15 +14,19 @@ export type EventType =
   | 'private_thought'
   | 'link_shared'
   | 'money'
-  | 'company_founded'
-  | 'company_updated'
   | 'offer_made'
   | 'offer_resolved'
   | 'decision'
   | 'promise_made'
   | 'promise_fulfilled'
   | 'promise_overdue'
+  | 'message'
+  | 'thread_started'
+  | 'thread_development'
+  | 'thread_resolved'
+  | 'world'
   | 'time_passed';
+export type EventType = CoreEventType | (string & {});
 
 export interface Game {
   id: string;
@@ -139,15 +144,12 @@ export interface Knowledge {
   updatedAt: string;
 }
 
-// ---- Milestone 2: economy ----
-
-export type ProductStage = 'idea' | 'prototype' | 'mvp' | 'launched';
-export const PRODUCT_STAGES: ProductStage[] = ['idea', 'prototype', 'mvp', 'launched'];
+// ---- Resources, offers, obligations (generic; the pack sets currency and entity types) ----
 
 export interface Account {
   id: string;
   gameId: string;
-  ownerKind: 'character' | 'company';
+  ownerKind: 'character' | 'entity'; // entity = a pack-defined owner (company, guild, noble house…)
   ownerId: string;
   balanceCents: number;
   createdAt: string;
@@ -167,50 +169,23 @@ export interface Transaction {
   createdAt: string;
 }
 
-export interface Company {
-  id: string;
-  gameId: string;
-  name: string;
-  description: string;
-  productStage: ProductStage;
-  totalShares: number;
-  foundedGameTime: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Shareholding {
-  companyId: string;
-  characterId: string;
-  shares: number;
-  role: string;
-  acquiredGameTime: string;
-}
-
-export type OfferKind = 'join_company' | 'hire' | 'purchase' | 'investment';
-
-export interface OfferTerms {
-  equityPercent: number | null;
-  salaryMonthlyCents: number | null;
-  priceMonthlyCents: number | null;
-  amountCents: number | null;
-  role: string | null;
-}
-
+/** Something one character proposes to another. Kinds and terms are defined by the game pack. */
 export interface Offer {
   id: string;
   gameId: string;
-  companyId: string | null;
+  kind: string;
   fromCharacterId: string;
   toCharacterId: string;
-  kind: OfferKind;
-  terms: OfferTerms;
+  subjectRef: string | null; // pack-interpreted (e.g. a company id)
+  label: string | null; // role / title / what exactly
+  terms: Record<string, number>;
   description: string;
   status: 'pending' | 'accepted' | 'rejected' | 'countered' | 'withdrawn';
   parentOfferId: string | null;
   attempts: number;
   lastOutcome: string | null;
   nextDecisionAfter: string | null;
+  lastAppraisal: unknown | null; // reused when the world turn revisits a deferred decision
   createdGameTime: string;
   resolvedGameTime: string | null;
   createdAt: string;
@@ -249,7 +224,9 @@ export interface DecisionRecord {
   id: string;
   gameId: string;
   turnId: string;
-  offerId: string;
+  offerId: string | null;
+  threadId: string | null;
+  domain: string;
   characterId: string;
   outcome: string;
   finalScore: number;
@@ -258,6 +235,51 @@ export interface DecisionRecord {
   reasons: string[];
   detail: unknown;
   gameTime: string;
+  createdAt: string;
+}
+
+// ---- Living world: story threads and scheduled developments ----
+
+/** A persistent developing situation in the world (not a quest). */
+export interface StoryThread {
+  id: string;
+  gameId: string;
+  title: string;
+  summary: string;
+  status: 'emerging' | 'active' | 'resolved' | 'dormant';
+  momentum: number; // 0–100; resolves at 100
+  urgency: number; // momentum gained per day (before the roll)
+  visibility: 'hidden' | 'participants' | 'public';
+  participantIds: string[];
+  causeEventIds: string[];
+  resolution: ThreadResolution;
+  outcome: string | null;
+  createdGameTime: string;
+  updatedGameTime: string;
+  resolvedGameTime: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThreadResolution {
+  actorId: string;
+  domain: string;
+  option: string;
+  factors: { factor: string; value: number; reason: string }[];
+  ifAccepted: { summary: string; messageToPlayer: string | null; newPressure: string | null };
+  ifRejected: { summary: string; messageToPlayer: string | null; newPressure: string | null };
+}
+
+/** Something the world will do at a given time (engine- or pack-defined kind). */
+export interface ScheduledItem {
+  id: string;
+  gameId: string;
+  dueGameTime: string;
+  kind: string; // "message", "director_review", …
+  payload: Record<string, unknown>;
+  threadId: string | null;
+  status: 'pending' | 'done' | 'cancelled';
+  createdGameTime: string;
   createdAt: string;
 }
 

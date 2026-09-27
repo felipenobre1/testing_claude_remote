@@ -1,7 +1,9 @@
 // Ordered schema migrations. Each entry runs once, inside a transaction.
 // Never edit an applied migration; append a new one.
 
-export const MIGRATIONS: string[] = [
+export type Migration = string | { sql: string; disableForeignKeys: true };
+
+export const MIGRATIONS: Migration[] = [
   /* v1 — Milestone 1 core */ `
   CREATE TABLE games (
     id                  TEXT PRIMARY KEY,
@@ -226,26 +228,7 @@ export const MIGRATIONS: string[] = [
     created_at      TEXT NOT NULL,
     CHECK (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
   );
-  CREATE TABLE companies (
-    id                TEXT PRIMARY KEY,
-    game_id           TEXT NOT NULL REFERENCES games(id),
-    name              TEXT NOT NULL,
-    description       TEXT NOT NULL,
-    product_stage     TEXT NOT NULL CHECK (product_stage IN ('idea', 'prototype', 'mvp', 'launched')),
-    total_shares      INTEGER NOT NULL CHECK (total_shares > 0),
-    founded_game_time TEXT NOT NULL,
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
-    UNIQUE (game_id, name)
-  );
-  CREATE TABLE shareholdings (
-    company_id         TEXT NOT NULL REFERENCES companies(id),
-    character_id       TEXT NOT NULL REFERENCES characters(id),
-    shares             INTEGER NOT NULL CHECK (shares > 0),
-    role               TEXT NOT NULL,
-    acquired_game_time TEXT NOT NULL,
-    PRIMARY KEY (company_id, character_id)
-  );
+  -- (company tables used to be created here; they are now owned by the Startup game pack)
   -- Offers need the other person's decision (made by the NPC, executed by the engine).
   CREATE TABLE offers (
     id                 TEXT PRIMARY KEY,
@@ -296,7 +279,8 @@ export const MIGRATIONS: string[] = [
   DELETE FROM facts WHERE predicate IN ('cash_eur', 'company');
   `,
 
-  /* v4 — independent NPC decisions: generic offers, decision states, resolved decisions */ `
+  /* v4 — independent NPC decisions: generic offers, decision states, resolved decisions (rebuilds a table: foreign keys off) */
+  { disableForeignKeys: true, sql: `
   -- Offers become generic deals (cofounder, job, customer purchase, investment).
   CREATE TABLE offers_v4 (
     id                  TEXT PRIMARY KEY,
@@ -371,5 +355,86 @@ export const MIGRATIONS: string[] = [
     game_time    TEXT NOT NULL,
     created_at   TEXT NOT NULL
   );
-  `,
+  ` },
+
+  /* v5 — Living Story Engine: generic offers/resources/decisions; story threads; world schedule.
+     Rebuilds tables, so it runs with foreign keys off (SQLite's documented table-rebuild procedure). */
+  { disableForeignKeys: true, sql: `
+  -- Accounts: owners are characters or pack-defined entities (was: 'company').
+  CREATE TABLE accounts_v5 (
+    id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('character', 'entity')), owner_id TEXT NOT NULL,
+    balance_cents INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE (game_id, owner_kind, owner_id)
+  );
+  INSERT INTO accounts_v5 SELECT id, game_id, CASE owner_kind WHEN 'company' THEN 'entity' ELSE owner_kind END, owner_id, balance_cents, created_at, updated_at FROM accounts;
+  DROP TABLE accounts;
+  ALTER TABLE accounts_v5 RENAME TO accounts;
+
+  -- Offers: generic kind + pack-defined numeric terms (was: company-specific columns).
+  CREATE TABLE offers_v5 (
+    id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
+    kind TEXT NOT NULL,
+    from_character_id TEXT NOT NULL REFERENCES characters(id), to_character_id TEXT NOT NULL REFERENCES characters(id),
+    subject_ref TEXT, label TEXT, terms_json TEXT NOT NULL, description TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'countered', 'withdrawn')),
+    parent_offer_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_outcome TEXT, next_decision_after TEXT, last_appraisal_json TEXT,
+    created_game_time TEXT NOT NULL, resolved_game_time TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  INSERT INTO offers_v5 SELECT id, game_id, kind, from_character_id, to_character_id, company_id,
+      json_extract(terms_json, '$.role'),
+      json_object('equityPercent', json_extract(terms_json, '$.equityPercent'),
+                  'salaryMonthly', json_extract(terms_json, '$.salaryMonthlyCents') / 100.0,
+                  'priceMonthly', json_extract(terms_json, '$.priceMonthlyCents') / 100.0,
+                  'amount', json_extract(terms_json, '$.amountCents') / 100.0),
+      description, status, parent_offer_id, attempts, last_outcome, next_decision_after, NULL,
+      created_game_time, resolved_game_time, created_at, updated_at
+    FROM offers;
+  DROP TABLE offers;
+  ALTER TABLE offers_v5 RENAME TO offers;
+
+  -- Decisions: about an offer OR a story thread, in a named domain.
+  CREATE TABLE decisions_v5 (
+    id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id), turn_id TEXT NOT NULL,
+    offer_id TEXT REFERENCES offers(id), thread_id TEXT, domain TEXT NOT NULL,
+    character_id TEXT NOT NULL REFERENCES characters(id), outcome TEXT NOT NULL, final_score INTEGER NOT NULL, roll INTEGER NOT NULL,
+    seed TEXT NOT NULL, reasons_json TEXT NOT NULL, detail_json TEXT NOT NULL, game_time TEXT NOT NULL, created_at TEXT NOT NULL
+  );
+  INSERT INTO decisions_v5 SELECT d.id, d.game_id, d.turn_id, d.offer_id, NULL, COALESCE(o.kind, 'offer'), d.character_id, d.outcome, d.final_score, d.roll,
+      d.seed, d.reasons_json, d.detail_json, d.game_time, d.created_at
+    FROM decisions d LEFT JOIN offers o ON o.id = d.offer_id;
+  DROP TABLE decisions;
+  ALTER TABLE decisions_v5 RENAME TO decisions;
+
+  -- Decision states changed shape (generic limits); they are regenerated on demand.
+  DELETE FROM decision_states;
+
+  -- Story threads: persistent developing situations. Not quests.
+  CREATE TABLE story_threads (
+    id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
+    title TEXT NOT NULL, summary TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('emerging', 'active', 'resolved', 'dormant')),
+    momentum INTEGER NOT NULL, urgency INTEGER NOT NULL,
+    visibility TEXT NOT NULL CHECK (visibility IN ('hidden', 'participants', 'public')),
+    participants_json TEXT NOT NULL, cause_event_ids_json TEXT NOT NULL, resolution_json TEXT NOT NULL, outcome TEXT,
+    created_game_time TEXT NOT NULL, updated_game_time TEXT NOT NULL, resolved_game_time TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE thread_events (
+    thread_id TEXT NOT NULL REFERENCES story_threads(id), event_id TEXT NOT NULL REFERENCES events(id),
+    PRIMARY KEY (thread_id, event_id)
+  );
+
+  -- The world's schedule: what will happen, and when (engine- or pack-defined kinds).
+  CREATE TABLE world_schedule (
+    id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
+    due_game_time TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, thread_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'cancelled')),
+    created_game_time TEXT NOT NULL, created_at TEXT NOT NULL
+  );
+  CREATE INDEX world_schedule_due ON world_schedule(game_id, status, due_game_time);
+
+  -- Game packs own their own tables; this records which pack migrations ran.
+  CREATE TABLE pack_migrations (pack TEXT NOT NULL, version INTEGER NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (pack, version));
+  ` },
 ];

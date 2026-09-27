@@ -1,28 +1,31 @@
 import type { z } from 'zod';
 import type { Store } from '../db/store.ts';
 import {
-  AppraisalSchema, CharacterProposalSchema, COMPUTED_FACTORS, DecisionStateProposalSchema, InterpretResultSchema, NpcTurnEnvelopeSchema, NpcTurnWireSchema,
-  type Appraisal, type DecisionState, type DecisionStateProposal, type InterpretResult, type NpcTurnEnvelope,
+  AppraisalSchema, CharacterProposalSchema, COMPUTED_FACTORS, DecisionStateProposalSchema, DirectorProposalSchema, interpretSchemaFor, NpcTurnEnvelopeSchema,
+  NpcTurnWireSchema, type Appraisal, type DecisionState, type DecisionStateProposal, type DirectorProposal, type InterpretResult, type NpcTurnEnvelope,
 } from '../domain/schemas.ts';
 import type {
-  Character, Game, GameEvent, Interaction, Offer, OfferTerms, Relationship, Scene, TranscriptLine, TurnResponse, WebDocument,
+  Character, Game, GameEvent, Interaction, Offer, Relationship, Scene, TranscriptLine, TurnResponse, WebDocument,
 } from '../domain/types.ts';
 import type { LLMProvider, LLMTask } from '../llm/provider.ts';
 import {
   perspectiveTrace, renderNpcBriefing, renderPlayerBriefing, retrieveNpcPerspective, retrievePlayerPerspective,
   type NpcContextInput, type NpcPerspective, type PendingCharacter,
 } from './context.ts';
-import { createGame, openingText, type NewGameOptions } from './newGame.ts';
 import {
-  appraiseSystemPrompt, appraiseUserPrompt, DECISION_STATE_SYSTEM_PROMPT, decisionStateUserPrompt, GENERATE_SYSTEM_PROMPT, generateUserPrompt,
+  appraiseSystemPrompt, appraiseUserPrompt, decisionStateSystemPrompt, decisionStateUserPrompt, generateSystemPrompt, generateUserPrompt,
   interpretSystemPrompt, npcSystemPrompt,
 } from './prompts.ts';
 import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 import { decisionStateProblems, validateChanges, validateCharacterProposal, validatePortrayal, type AcceptedChange, type Rejection } from './validate.ts';
 import { extractUrls, type PageFetcher } from './web.ts';
-import { applyOps, EconomyPlanner, npcEconomyBriefing, playerEconomyBriefing, type PlanContext } from './economy.ts';
-import { resolveDecision, seededRng, type Resolution } from './decision.ts';
+import { applyOps, npcThreadsBriefing, npcWorldBriefing, playerWorldBriefing, WorldPlanner, type PlanContext } from './planner.ts';
+import { resolveDecision, type Resolution } from './decision.ts';
+import { seededRng, type RngFactory } from './random.ts';
+import { runWorldTurn } from './world.ts';
+import type { GamePack } from '../packs/types.ts';
+import { startupPack } from '../packs/startup/index.ts';
 
 export interface TurnRequest {
   gameId: string;
@@ -62,24 +65,32 @@ export class Engine {
   readonly store: Store;
   readonly llm: LLMProvider;
   private now: () => string;
+  readonly pack: GamePack;
   private fetcher: PageFetcher | null;
-  private rng: (seed: string) => () => number;
+  private rng: RngFactory;
+  private directorEnabled: boolean;
+  private interpretSchema;
 
   /**
+   * `pack`: the world (default: Startup).
    * `fetcher`: how shared links are opened (null = links are heard but never opened).
-   * `rng`: randomness for decisions, from a seed derived from game + request (tests pass a fixed one).
+   * `rng`: randomness for decisions and world turns, from seeds derived from game + request (tests pass a fixed one).
+   * `director`: let the Story Director propose new situations during world turns (one model call per game day).
    */
-  constructor(store: Store, llm: LLMProvider, opts: { now?: () => string; fetcher?: PageFetcher | null; rng?: (seed: string) => () => number } = {}) {
+  constructor(store: Store, llm: LLMProvider, opts: { pack?: GamePack; now?: () => string; fetcher?: PageFetcher | null; rng?: RngFactory; director?: boolean } = {}) {
     this.store = store;
     this.llm = llm;
+    this.pack = opts.pack ?? startupPack;
     this.now = opts.now ?? (() => new Date().toISOString());
     this.fetcher = opts.fetcher ?? null;
     this.rng = opts.rng ?? seededRng;
+    this.directorEnabled = opts.director ?? false;
+    this.interpretSchema = interpretSchemaFor(this.pack.actions.map((a) => a.schema));
+    store.migratePack(this.pack.id, this.pack.migrations);
   }
 
-  newGame(opts: NewGameOptions = {}) {
-    const { game, player } = createGame(this.store, { now: this.now(), ...opts });
-    return { game, player, opening: openingText(game) };
+  newGame(opts: { playerName?: string } = {}) {
+    return this.pack.newGame(this.store, { ...opts, now: this.now() });
   }
 
   async takeTurn(req: TurnRequest): Promise<TurnResponse> {
@@ -123,17 +134,17 @@ export class Engine {
     trace.openInteraction = pp.interaction;
     const everyone = store.listCharacters(game.id);
     const nameOf = (id: string) => everyone.find((c) => c.id === id)?.name ?? id;
-    // The economy planner simulates money/company/promise changes on a copy of canonical state.
+    // The world planner simulates resource/offer/promise/thread changes on a copy of canonical state.
     const econCtx: PlanContext = {
-      store, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
+      store, pack: this.pack, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
       player, characters: everyone, interaction: null,
     };
-    const economy = new EconomyPlanner(econCtx);
+    const economy = new WorldPlanner(econCtx);
 
     // 1. Interpret raw input from the player's perspective.
-    const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name),
-      renderPlayerBriefing(pp, input, playerEconomyBriefing(economy, player.id, game.gameTime, nameOf)),
-      'interpretation', InterpretResultSchema, InterpretResultSchema);
+    const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name, this.pack),
+      renderPlayerBriefing(pp, input, playerWorldBriefing(economy, game.gameTime), this.pack.setting.world),
+      'interpretation', this.interpretSchema, this.interpretSchema as unknown as z.ZodType<InterpretResult>);
     trace.interpretation = interp;
     // Self-harm is never simulated: step out of the fiction, change nothing.
     if (interp.safety === 'self_harm') return this.clarify(trace, game, SELF_HARM_MESSAGE);
@@ -289,15 +300,17 @@ export class Engine {
         npcId: target.id, partner: player, channel: interaction.channel, interactionId: startedNew ? null : interaction.id,
         pendingLines, gameTime: t1, sceneLocation: location, pending, pendingDocuments,
       };
-      const econView = npcEconomyBriefing(economy, target.id, t1, (id) => (id === target!.id ? target!.name : nameOf(id)));
+      const econView = npcWorldBriefing(economy, target.id, t1);
       ctxInput.economy = econView.text;
+      ctxInput.situations = npcThreadsBriefing(economy, target.id);
+      ctxInput.world = this.pack.setting.world;
       const perspective = retrieveNpcPerspective(store, ctxInput);
       trace.retrieval = { ...perspectiveTrace(perspective), economyIds: econView.ids };
 
       const known = pending ? [...everyone, pending.character] : everyone;
       const vctx = {
         npc: target, observerIds: interaction.participantIds, findCharacter: (n: string) => findByName(known, n)[0], partnerId: player.id,
-        obligation: (id: string) => economy.obligation(id),
+        obligation: (id: string) => economy.obligation(id), thread: (id: string) => economy.thread(id),
       };
 
       // Meaningful decision? The engine resolves it BEFORE the NPC is portrayed.
@@ -308,8 +321,8 @@ export class Engine {
       }
 
       trace.validation = [];
-      let counterTerms: OfferTerms | null = null;
-      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target), renderNpcBriefing(perspective, ctxInput),
+      let counterTerms: Record<string, number> | null = null;
+      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, this.pack.setting.world), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
           const p = validatePortrayal(out, decision);
@@ -318,7 +331,7 @@ export class Engine {
           return [...v.rejected.map((r: Rejection) => `changes[${r.index}] rejected: ${r.reason}`), ...p.problems];
         });
       if (decision) {
-        economy.applyDecision(decision.offer, decision.resolution, { counter: counterTerms, condition: npcOut.condition, counterNote: npcOut.counterTerms?.note ?? '' });
+        economy.applyDecision(decision.offer, decision.resolution, { counter: counterTerms, condition: npcOut.condition, counterNote: npcOut.counterTerms?.note ?? '', appraisal: decision.appraisal });
       }
       trace.npcOutput = npcOut;
       const accepted = trace.validation.at(-1)!.accepted;
@@ -344,7 +357,8 @@ export class Engine {
       for (const change of accepted) {
         // Decisions with mechanical consequences are executed by the economy engine; the rest are mind changes.
         let err: string | null = null;
-        if (change.op === 'make_promise') err = economy.npcPromise(target.id, change.toId, change.description, null, change.dueInDays);
+        if (change.op === 'make_promise') economy.npcPromise(target.id, change.toId, change.description, change.dueInDays);
+        else if (change.op === 'thread_signal') economy.threadSignal(change.threadId, change.factor, change.value, change.reason);
         else if (change.op === 'fulfill_promise') err = economy.npcFulfill(target.id, change.promiseId);
         else plan.changes.push({ change, sourceEventId: exchange.id, gameTime: t1, channel: interaction.channel });
         if (err) economy.results.push(`✗ ${err}`);
@@ -352,8 +366,13 @@ export class Engine {
     }
     const npcResultCount = economy.results.length;
 
-    // 6. Time passing: recurring charges, overdue promises.
-    economy.passTime(t0, plan.newGameTime);
+    // 6. The world turn: time passes for everyone, not just the player.
+    trace.world = await runWorldTurn(economy, t0, plan.newGameTime, {
+      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`,
+      director: this.directorEnabled
+        ? (system, user) => this.callStructured<DirectorProposal>(trace, 'director', system, user, 'director', DirectorProposalSchema, DirectorProposalSchema)
+        : null,
+    });
     trace.economy = {
       actions: interp.actions, actionErrors, rejected: economy.rejected, results: economy.results,
       ops: economy.ops.map((o) => o.op), events: economy.events.map((e) => e.id),
@@ -391,7 +410,7 @@ export class Engine {
   }
 
   /** Single transaction: revision check, all writes, turn record. Throws ⇒ nothing written. */
-  private commit(game: Game, player: Character, plan: WritePlan, economy: EconomyPlanner, trace: Trace, response: TurnResponse, input: string): void {
+  private commit(game: Game, player: Character, plan: WritePlan, economy: WorldPlanner, trace: Trace, response: TurnResponse, input: string): void {
     const store = this.store;
     const now = this.now();
     const writes: WriteRecord[] = [];
@@ -411,7 +430,8 @@ export class Engine {
         store.upsertRelationship(plan.newCharacter.relationship);
         w('relationships', 'insert', plan.newCharacter.relationship.id, 'backstory');
       }
-      for (const wr of applyOps(store, economy.ops, now)) writes.push(wr);
+      for (const wr of economy.packState.commit(store)) writes.push(wr);
+      for (const wr of applyOps(store, economy)) writes.push(wr);
       for (const i of plan.interactionsToInsert) {
         store.insertInteraction(i);
         w('interactions', 'insert', i.id);
@@ -511,9 +531,9 @@ export class Engine {
    * have the model appraise the factors THEY care about, then resolve the outcome deterministically.
    */
   private async resolvePendingDecision(
-    trace: Trace, economy: EconomyPlanner, store: Store, game: Game, player: Character, npc: Character,
+    trace: Trace, economy: WorldPlanner, store: Store, game: Game, player: Character, npc: Character,
     perspective: NpcPerspective, ctxInput: NpcContextInput, gameTime: string,
-  ): Promise<{ offer: Offer; state: DecisionState; resolution: Resolution } | null> {
+  ): Promise<{ offer: Offer; state: DecisionState; resolution: Resolution; appraisal: Appraisal } | null> {
     const offer = economy.decidableOffersFor(npc.id)[0];
     if (!offer) return null;
     const offerText = `${economy.describeOffer(offer)} — "${offer.description}"`;
@@ -522,8 +542,10 @@ export class Engine {
     let stateSource = 'stored';
     if (!state) {
       const rel = perspective.relationships.find((r) => r.relationship.toCharacterId === player.id)?.relationship.summary ?? '';
-      const proposal = await this.callStructured<DecisionStateProposal>(trace, 'decision_state', DECISION_STATE_SYSTEM_PROMPT,
-        decisionStateUserPrompt(npc, rel, `${offer.kind.replace('_', ' ')}: ${offerText}`, gameTime), 'decision_state',
+      const kind = this.pack.offerKinds.find((k) => k.kind === offer.kind);
+      const termKeys = kind?.terms.map((t) => `${t.key} (${t.description})`).join(', ') ?? Object.keys(offer.terms).join(', ');
+      const proposal = await this.callStructured<DecisionStateProposal>(trace, 'decision_state', decisionStateSystemPrompt(this.pack.setting.world, termKeys),
+        decisionStateUserPrompt(npc, rel, `${kind?.summary ?? offer.kind}: ${offerText}`, gameTime, this.pack.setting.world), 'decision_state',
         DecisionStateProposalSchema, DecisionStateProposalSchema, (p) => decisionStateProblems(p));
       state = {
         ...proposal,
@@ -549,14 +571,14 @@ export class Engine {
 
     // Seeded by game + request + offer + attempt: a retried request resolves identically; nothing is rerolled.
     const seed = `${game.id}:${trace.requestId}:${offer.id}:${offer.attempts + 1}`;
-    const resolution = resolveDecision({ state, offer, appraisal, rng: this.rng(seed), seed });
+    const resolution = resolveDecision({ state, option: { kind: offer.kind, terms: offer.terms }, appraisal, rng: this.rng(seed), seed });
     trace.decision = { offerId: offer.id, npcId: npc.id, stateSource, state, appraisal, resolution };
-    return { offer, state, resolution };
+    return { offer, state, resolution, appraisal };
   }
 
   private async generateCharacter(trace: Trace, game: Game, player: Character, everyone: Character[], name: string, relationHint: string | null): Promise<PendingCharacter> {
-    const user = generateUserPrompt({ name, relationHint, player, gameTime: game.gameTime, existingNames: everyone.filter((c) => !c.isPlayer).map((c) => c.name) });
-    const p = await this.callStructured(trace, 'generate_character', GENERATE_SYSTEM_PROMPT, user, 'character',
+    const user = generateUserPrompt({ name, relationHint, player, gameTime: game.gameTime, existingNames: everyone.filter((c) => !c.isPlayer).map((c) => c.name), world: this.pack.setting.world });
+    const p = await this.callStructured(trace, 'generate_character', generateSystemPrompt(this.pack), user, 'character',
       CharacterProposalSchema, CharacterProposalSchema, (proposal) => validateCharacterProposal(proposal, name, everyone));
     const now = this.now();
     const character: Character = {
@@ -651,7 +673,10 @@ export function findByName(characters: Character[], name: string): Character[] {
 
 /** The NPC's own private situation, as they know it (for their briefing only). */
 export function renderDecisionState(d: DecisionState): string {
-  const lim = d.hardConstraints.map((c) => `- ${c.kind.replace(/_/g, ' ')}${c.value !== null ? `: ${c.value}` : ''}${c.note ? ` (${c.note})` : ''}`);
+  const lim = [
+    ...d.limits.map((l) => `- ${l.term}: ${l.op === 'max' ? 'at most' : 'at least'} ${l.value}${l.note ? ` (${l.note})` : ''}`),
+    ...(d.requiresApproval ? [`- you cannot give a final yes without ${d.requiresApproval}`] : []),
+  ];
   return [
     `Your position: ${d.role}`,
     `What you want: ${d.goals.join('; ')}`,
@@ -664,12 +689,12 @@ export function renderDecisionState(d: DecisionState): string {
 
 /** What the portrayal receives: the outcome and plain reasons. No scores, no roll. */
 export function renderResolution(r: Resolution, offerText: string): string {
-  const reasons = r.reasons.map((x) => `- ${x.replace(/^constraint: /, 'limit: ')}`);
-  const limits = Object.entries(r.counterLimits).map(([k, v]) => `${k.replace(/Cents$/, '').replace(/([A-Z])/g, ' $1').toLowerCase()}: ${/Cents$/.test(k) ? `€${(v as number) / 100}` : v}`);
+  const reasons = r.reasons.map((x) => `- ${x}`);
+  const counter = r.counterTerms ? Object.entries(r.counterTerms).map(([k, v]) => `${k} = ${v}`).join(', ') : '';
   return [
     `About: ${offerText}`,
     `Outcome: ${r.outcome}`,
     'Why (your honest reasons):', ...reasons,
-    ...(r.outcome === 'counter' && limits.length ? [`A counter you could live with must respect: ${limits.join('; ')}`] : []),
+    ...(r.outcome === 'counter' ? [`A counter must respect your limits${counter ? ` (for example: ${counter})` : ''}.`] : []),
   ].join('\n');
 }

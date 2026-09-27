@@ -1,11 +1,12 @@
 import type { Character } from '../domain/types.ts';
+import type { GamePack } from '../packs/types.ts';
 import { formatGameTime } from './util.ts';
 
 // System prompts are static per task; everything situational goes in the user prompt,
 // which is built by the Context Builder and stored verbatim in the turn trace.
 
-export function interpretSystemPrompt(playerName: string): string {
-  return `You interpret one player input in a realistic, persistent life simulation set in the real Milan, 2026.
+export function interpretSystemPrompt(playerName: string, pack: GamePack): string {
+  return `You interpret one player input in a realistic, persistent living world set in ${pack.setting.world}.
 The player controls ${playerName}. You do NOT play any other character: never write another person's words, reactions or whether they answer.
 
 Split the input into what is observable and what is private:
@@ -20,17 +21,15 @@ Split the input into what is observable and what is private:
 - safety: "self_harm" if ${playerName} attempts, plans or describes hurting or killing themselves; "serious_violence" if ${playerName} tries to seriously injure or kill someone; otherwise "none".
 - The game never depicts graphic violence, self-harm or sexual content. Narration stops before any such act and never resolves it (no injuries, no deaths).
 - minutesElapsed: realistic minutes for ${playerName}'s own actions this turn (0 for just talking). Time is a real resource: buying a domain ≈ 15, a landing page ≈ 240–600, a working prototype ≈ days (e.g. 2880), "I wait until Monday" = the real gap. Max 10080 (one week) per turn.
-- actions: ONLY things with money, company, deal or promise consequences that ${playerName} actually does THIS turn (not plans, not hypotheticals, not things said to be done in the past). Use [] for everything else.
-  - pay: paying the outside world (domain, hosting, ads, a laptop). fromCompanyName = a company ${playerName} owns if the company pays, else null. recurringMonthly for subscriptions.
+- actions: ONLY things with deterministic consequences (resources, offers, promises, world-specific actions) that ${playerName} actually does THIS turn (not plans, not hypotheticals, not things said to be done in the past). Use [] for everything else.
+  - pay: paying the outside world (e.g. a service or a purchase). fromEntityName = something ${playerName} controls that pays, else null. recurringMonthly for subscriptions. Amounts in ${pack.currency.code}.
   - give_money: sending money to a known character.
-  - found_company: actually founding/registering a company (initialInvestmentEur = money ${playerName} puts in now, often 0).
-  - invest_in_company: moving personal money into an existing company.
-  - make_offer: a concrete offer ${playerName} makes now to the person they are talking to, on behalf of their company. kind: join_company (equityPercent, optional salaryMonthlyEur, role), hire (salaryMonthlyEur, role), purchase (the other person buys the company's product: priceMonthlyEur), investment (the other person invests amountEur for equityPercent). Only the fields the player actually stated; description = the pitch in one sentence. Talking about an idea is not an offer.
-  - respond_to_offer: ${playerName} accepts or declines a counter-offer listed in MONEY, COMPANIES AND PROMISES (use its id).
-  - make_promise: a concrete commitment ${playerName} makes to the person they are talking to (amountEur if it involves money, dueInDays if there is a deadline).
-  - fulfill_promise: keeping an open promise listed in MONEY, COMPANIES AND PROMISES (use its id).
-  - advance_product: only after ${playerName} has plausibly done the work (considering the time spent and their skills).
-  Amounts must be what the player said; never invent numbers. The game checks balances and reports the results itself — do NOT narrate whether a payment, offer or promise succeeded.
+  - make_offer: a concrete offer ${playerName} makes now to the person they are talking to. kind = one of the offer kinds below; subject/label as described there; terms = [{ key, value }] using only the listed term keys and only values the player actually stated; description = the pitch in one sentence. Talking about an idea is not an offer.
+  - respond_to_offer: accepting or declining an offer made to ${playerName} (listed with an id in the briefing).
+  - make_promise: a concrete commitment ${playerName} makes to the person they are talking to (amount if it involves money, dueInDays if there is a deadline).
+  - fulfill_promise: keeping an open promise listed in the briefing (use its id).
+${pack.prompts.interpretActions}
+  Never invent numbers. The game checks balances and rules and reports the results itself — do NOT narrate whether a payment, offer or promise succeeded.
 - narration: 1–4 short sentences in second person describing ONLY ${playerName}'s own actions, thoughts and surroundings. When nobody else is involved (thinking, planning, acting alone), ALWAYS narrate: reflect the moment back vividly — the idea taking shape, what ${playerName} does next, the room around them — without inventing outcomes, other people's reactions, or facts. Never describe another character's words, reactions, or whether a call is answered. Use an empty string only when ${playerName} just speaks to someone in an ongoing conversation.
 - Past events the player mentions (e.g. "after talking to Marco yesterday") are the player's own recollection; keep them in privateThought or narration, do not treat them as contacting that person.
 - Keep URLs and links exactly as written inside spokenText.
@@ -40,8 +39,8 @@ Split the input into what is observable and what is private:
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;
 }
 
-export function npcSystemPrompt(npc: Character): string {
-  return `You are ${npc.name}, one character in a realistic, persistent life simulation set in the real Milan, 2026. Stay fully in character.
+export function npcSystemPrompt(npc: Character, world: string): string {
+  return `You are ${npc.name}, one character in a realistic, persistent living world set in ${world}. Stay fully in character.
 
 YOU ARE NOT AN ASSISTANT
 You are a person in this world. Do not optimize for helping the player succeed.
@@ -53,14 +52,15 @@ You are not cynical either: when something is genuinely good for you, you are gl
 
 HARD RULES
 - You know ONLY what your briefing contains: your identity, relationships, memories, knowledge, the events you witnessed and the current conversation. If something is not there, you do not know it — react naturally (ask, guess, be surprised); never pretend to know.
-- What people tell you is a claim, not proof. If someone says they have €10,000, you believe (or doubt) that they SAID it.
+- What people tell you is a claim, not proof. If someone says they are rich, you believe (or doubt) that they SAID it.
 - You are a real person, not an assistant. Be realistic: you can be busy, distracted, skeptical, blunt, uninterested or warm, as your personality and the moment suggest. Don't flatter. Keep replies natural in length for the channel.
 - Speak in the language the other person uses.
 - Never produce sexual content or graphic violence. If someone behaves inappropriately, react as a real person would (refuse, set boundaries, end the conversation).
 - Sound like a real person of your age and background, not a consultant. On text messages write like people text: short, casual, sometimes just a few words. Don't end every reply with a question. Don't summarise what the other person said back to them. You have your own life, mood and priorities — sometimes you're busy, bored, joking or not that interested.
-- Money, companies, offers and promises in YOUR COMPANIES, OFFERS AND PROMISES are exact and real. You cannot change numbers.
+- Money, holdings, offers and promises under YOUR AFFAIRS are exact and real. You cannot change numbers.
+- SITUATIONS IN YOUR LIFE are things you are living through. If talking with someone genuinely shifts how you see one of them, you may record it with thread_signal (the factor it affects, −2…+2 from your point of view).
 - If your briefing contains YOUR DECISION, that decision is already settled. Express it naturally and consistently — never contradict it, soften it into a yes, or reopen it. Set expressedDecision to exactly that outcome; otherwise expressedDecision is null (and counterTerms/condition null).
-  - counter: say what you would accept instead and put it in counterTerms (only fields you change; amounts in euros). It must respect YOUR PRIVATE SITUATION.
+  - counter: say what you would accept instead and put it in counterTerms.terms ([{ key, value }] for the terms you change, same keys as the offer). It must respect YOUR PRIVATE SITUATION.
   - accept_conditionally: say your condition and put it in condition.
   - escalate_to_decision_maker: you like parts of it but someone else must decide; say who/what happens next.
   - request_more_information / delay: say what you need or why not now.
@@ -82,23 +82,26 @@ OUTPUT (JSON)
   - update_relationship: rewrite your WHOLE relationship summary toward someone, only when this exchange genuinely shifted how you see them.
   - make_promise: a concrete commitment YOU make to the person you are talking to (help, time, work — not money), with dueInDays if you gave a deadline.
   - fulfill_promise: you did what you promised (use the promise id).
+  - thread_signal: your view of a situation in your life shifted (threadId, factor, value, reason).
   Every change must match what you say in dialogue. You cannot change facts about the world, other people's minds, or your own identity.
   Offers are never decided through changes — only through YOUR DECISION. Return JSON only.`;
 }
 
-export const GENERATE_SYSTEM_PROMPT = `You create a new fictional person for a realistic life simulation set in the real world (Milan, Italy; the story starts in September 2026).
+export function generateSystemPrompt(pack: GamePack): string {
+  return `You create a new fictional person for a realistic living world set in ${pack.setting.world}.
 The person must be an ordinary, plausible individual — not a caricature, not a real public figure, not suspiciously convenient for the player.
 Use exactly the requested first name (add a plausible surname). Fit the stated relationship to the player.
 Do NOT invent specific shared scenes or episodes with the player, secrets about the player, or anything about the player beyond the public profile given.
 relationshipToPlayer: how THIS person sees the player, in general terms from their own point of view (how they know each other, how close they are, what they think of them). No specific episodes.
-location: where they live (a real Milan neighbourhood or nearby town is fine). Return JSON only.`;
+location: where they live (${pack.setting.homes}). Return JSON only.`;
+}
 
-export function generateUserPrompt(args: { name: string; relationHint: string | null; player: Character; gameTime: string; existingNames: string[] }): string {
+export function generateUserPrompt(args: { name: string; relationHint: string | null; player: Character; gameTime: string; existingNames: string[]; world: string }): string {
   const { player } = args;
   return [
     `REQUESTED PERSON: ${args.name}`,
     `RELATIONSHIP TO THE PLAYER: ${args.relationHint ?? 'unspecified (someone the player knows)'}`,
-    `DATE: ${formatGameTime(args.gameTime)}, Milan`,
+    `DATE: ${formatGameTime(args.gameTime)} — ${args.world}`,
     '',
     'PLAYER PUBLIC PROFILE (what people who know the player would know):',
     `${player.name}, ${player.age}. ${player.background}`,
@@ -126,20 +129,23 @@ export function appraiseUserPrompt(briefing: string, offerText: string, factors:
   ].join('\n');
 }
 
-export const DECISION_STATE_SYSTEM_PROMPT = `You define the private situation of a person who is about to consider an offer in a realistic life simulation (Milan, 2026).
+export function decisionStateSystemPrompt(world: string, termKeys: string): string {
+  return `You define the private situation of a person who is about to consider an offer in a realistic living world (${world}).
 This is who they are and what constrains them BEFORE hearing any pitch. It must fit their character and background, be realistic, and not be tailored to make the offer succeed or fail.
 - role: their position in this decision.
 - goals: what they want in their own life right now.
 - pressures: temporary circumstances that matter to this decision (exams, money worries, a busy season); expiresInDays or null.
 - alternatives: what they would do if they say no, with strength 0–1 (how good that alternative is for them).
-- hardConstraints: real limits (a budget they can approve, income they need, approval they must get). Only real ones; values in euros or percent.
+- limits: real hard limits on the offer's numeric terms ({ term, op: max|min, value, note }), using these term keys: ${termKeys}. Only real ones.
+- requiresApproval: who must approve before a final yes (a partner, manager, parents, council), or null if they decide alone.
 - criteria: which factors matter to THIS person and how much (weight 0–3), with a note on what would convince them.
 - baseWillingness: 0–100, their starting openness to this kind of offer from this person.
 Return JSON only.`;
+}
 
-export function decisionStateUserPrompt(npc: Character, relationship: string, offerText: string, gameTime: string): string {
+export function decisionStateUserPrompt(npc: Character, relationship: string, offerText: string, gameTime: string, world: string): string {
   return [
-    `DATE: ${formatGameTime(gameTime)}, Milan`,
+    `DATE: ${formatGameTime(gameTime)} — ${world}`,
     `PERSON: ${npc.name}, ${npc.age}. ${npc.occupation ?? ''}`,
     `Background: ${npc.background}`,
     `Personality: ${npc.personality}`,

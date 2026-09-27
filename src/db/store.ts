@@ -1,11 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { MIGRATIONS } from './migrations.ts';
+import { MIGRATIONS, type Migration } from './migrations.ts';
 import type {
   Character, Fact, Game, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene,
   TurnRow, TurnStatus, TurnResponse, WebDocument,
-  Account, Company, DecisionRecord, Obligation, Offer, RecurringPayment, Shareholding, Transaction,
+  Account, DecisionRecord, Obligation, Offer, RecurringPayment, ScheduledItem, StoryThread, Transaction,
 } from '../domain/types.ts';
 import type { DecisionState } from '../domain/schemas.ts';
 
@@ -39,10 +39,33 @@ export class Store {
     this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
     const row = this.db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations').get() as Row;
     for (let v = row.v + 1; v <= MIGRATIONS.length; v++) {
+      this.applyMigration(MIGRATIONS[v - 1]!, () => this.run('INSERT INTO schema_migrations (version, applied_at) VALUES (:v, :t)', { v, t: new Date().toISOString() }));
+    }
+  }
+
+  /** Runs a pack's own migrations (tables the engine knows nothing about). Idempotent. */
+  migratePack(pack: string, migrations: Migration[]): void {
+    for (let v = 1; v <= migrations.length; v++) {
+      if (this.get('SELECT 1 AS x FROM pack_migrations WHERE pack = :pack AND version = :v', { pack, v })) continue;
+      this.applyMigration(migrations[v - 1]!, () => this.run('INSERT INTO pack_migrations (pack, version, applied_at) VALUES (:pack, :v, :t)', { pack, v, t: new Date().toISOString() }));
+    }
+  }
+
+  private applyMigration(m: Migration, record: () => void): void {
+    const sql = typeof m === 'string' ? m : m.sql;
+    const noFk = typeof m !== 'string' && m.disableForeignKeys;
+    if (noFk) this.db.exec('PRAGMA foreign_keys = OFF');
+    try {
       this.tx(() => {
-        this.db.exec(MIGRATIONS[v - 1]!);
-        this.run('INSERT INTO schema_migrations (version, applied_at) VALUES (:v, :t)', { v, t: new Date().toISOString() });
+        this.db.exec(sql);
+        if (noFk) {
+          const broken = this.all('PRAGMA foreign_key_check');
+          if (broken.length) throw new Error(`migration broke foreign keys: ${JSON.stringify(broken.slice(0, 3))}`);
+        }
+        record();
       });
+    } finally {
+      if (noFk) this.db.exec('PRAGMA foreign_keys = ON');
     }
   }
 
@@ -59,13 +82,14 @@ export class Store {
     }
   }
 
-  private run(sql: string, p: Record<string, unknown> = {}) {
+  // Named-parameter helpers (also used by game packs for their own tables).
+  run(sql: string, p: Record<string, unknown> = {}) {
     return this.db.prepare(sql).run(bind(sql, p));
   }
-  private get(sql: string, p: Record<string, unknown> = {}): Row | undefined {
+  get(sql: string, p: Record<string, unknown> = {}): Row | undefined {
     return this.db.prepare(sql).get(bind(sql, p)) as Row | undefined;
   }
-  private all(sql: string, p: Record<string, unknown> = {}): Row[] {
+  all(sql: string, p: Record<string, unknown> = {}): Row[] {
     return this.db.prepare(sql).all(bind(sql, p)) as Row[];
   }
 
@@ -349,47 +373,19 @@ export class Store {
     return this.all('SELECT * FROM transactions WHERE game_id = :gameId ORDER BY game_time, rowid', { gameId }).map(mapTransaction);
   }
 
-  insertCompany(c: Company): void {
-    this.run(
-      `INSERT INTO companies (id, game_id, name, description, product_stage, total_shares, founded_game_time, created_at, updated_at)
-       VALUES (:id, :gameId, :name, :description, :productStage, :totalShares, :foundedGameTime, :createdAt, :updatedAt)`, { ...c });
-  }
-  getCompany(id: string): Company | undefined {
-    const r = this.get('SELECT * FROM companies WHERE id = :id', { id });
-    return r && mapCompany(r);
-  }
-  listCompanies(gameId: string): Company[] {
-    return this.all('SELECT * FROM companies WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapCompany);
-  }
-  updateCompany(c: Company): void {
-    this.run('UPDATE companies SET product_stage = :productStage, total_shares = :totalShares, description = :description, updated_at = :updatedAt WHERE id = :id', { ...c });
-  }
-  insertShareholding(h: Shareholding): void {
-    this.run(
-      `INSERT INTO shareholdings (company_id, character_id, shares, role, acquired_game_time)
-       VALUES (:companyId, :characterId, :shares, :role, :acquiredGameTime)`, { ...h });
-  }
-  listShareholdings(companyId: string): Shareholding[] {
-    return this.all('SELECT * FROM shareholdings WHERE company_id = :c ORDER BY acquired_game_time, rowid', { c: companyId }).map(mapShareholding);
-  }
-  /** Perspective query: companies this character holds shares in. */
-  listCompaniesOf(characterId: string): Company[] {
-    return this.all(
-      'SELECT c.* FROM companies c JOIN shareholdings h ON h.company_id = c.id WHERE h.character_id = :ch ORDER BY c.rowid', { ch: characterId },
-    ).map(mapCompany);
-  }
-
   insertOffer(o: Offer): void {
     this.run(
-      `INSERT INTO offers (id, game_id, company_id, from_character_id, to_character_id, kind, terms_json, description, status, parent_offer_id,
-         attempts, last_outcome, next_decision_after, created_game_time, resolved_game_time, created_at, updated_at)
-       VALUES (:id, :gameId, :companyId, :fromCharacterId, :toCharacterId, :kind, :terms, :description, :status, :parentOfferId,
-         :attempts, :lastOutcome, :nextDecisionAfter, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`, { ...o, terms: json(o.terms) });
+      `INSERT INTO offers (id, game_id, kind, from_character_id, to_character_id, subject_ref, label, terms_json, description, status, parent_offer_id,
+         attempts, last_outcome, next_decision_after, last_appraisal_json, created_game_time, resolved_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :kind, :fromCharacterId, :toCharacterId, :subjectRef, :label, :terms, :description, :status, :parentOfferId,
+         :attempts, :lastOutcome, :nextDecisionAfter, :appraisal, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`,
+      { ...o, terms: json(o.terms), appraisal: o.lastAppraisal == null ? null : json(o.lastAppraisal) });
   }
   updateOffer(o: Offer): void {
     this.run(
       `UPDATE offers SET status = :status, attempts = :attempts, last_outcome = :lastOutcome, next_decision_after = :nextDecisionAfter,
-         resolved_game_time = :resolvedGameTime, updated_at = :updatedAt WHERE id = :id`, { ...o });
+         last_appraisal_json = :appraisal, resolved_game_time = :resolvedGameTime, updated_at = :updatedAt WHERE id = :id`,
+      { ...o, appraisal: o.lastAppraisal == null ? null : json(o.lastAppraisal) });
   }
   getOffer(id: string): Offer | undefined {
     const r = this.get('SELECT * FROM offers WHERE id = :id', { id });
@@ -425,6 +421,44 @@ export class Store {
     return this.all('SELECT * FROM obligations WHERE debtor_id = :c OR creditor_id = :c ORDER BY rowid', { c: characterId }).map(mapObligation);
   }
 
+  // ---------- story threads & world schedule ----------
+  insertThread(t: StoryThread): void {
+    this.run(
+      `INSERT INTO story_threads (id, game_id, title, summary, status, momentum, urgency, visibility, participants_json, cause_event_ids_json,
+         resolution_json, outcome, created_game_time, updated_game_time, resolved_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :title, :summary, :status, :momentum, :urgency, :visibility, :participants, :causes,
+         :resolution, :outcome, :createdGameTime, :updatedGameTime, :resolvedGameTime, :createdAt, :updatedAt)`,
+      { ...t, participants: json(t.participantIds), causes: json(t.causeEventIds), resolution: json(t.resolution) });
+  }
+  updateThread(t: StoryThread): void {
+    this.run(
+      `UPDATE story_threads SET summary = :summary, status = :status, momentum = :momentum, urgency = :urgency, visibility = :visibility,
+         resolution_json = :resolution, outcome = :outcome, updated_game_time = :updatedGameTime, resolved_game_time = :resolvedGameTime, updated_at = :updatedAt
+       WHERE id = :id`, { ...t, resolution: json(t.resolution) });
+  }
+  getThread(id: string): StoryThread | undefined {
+    const r = this.get('SELECT * FROM story_threads WHERE id = :id', { id });
+    return r && mapThread(r);
+  }
+  listThreads(gameId: string): StoryThread[] {
+    return this.all('SELECT * FROM story_threads WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapThread);
+  }
+  linkThreadEvent(threadId: string, eventId: string): void {
+    this.run('INSERT OR IGNORE INTO thread_events (thread_id, event_id) VALUES (:t, :e)', { t: threadId, e: eventId });
+  }
+  insertScheduled(i: ScheduledItem): void {
+    this.run(
+      `INSERT INTO world_schedule (id, game_id, due_game_time, kind, payload_json, thread_id, status, created_game_time, created_at)
+       VALUES (:id, :gameId, :dueGameTime, :kind, :payload, :threadId, :status, :createdGameTime, :createdAt)`, { ...i, payload: json(i.payload) });
+  }
+  setScheduledStatus(id: string, status: ScheduledItem['status']): void {
+    this.run('UPDATE world_schedule SET status = :status WHERE id = :id', { id, status });
+  }
+  listScheduled(gameId: string, status?: ScheduledItem['status']): ScheduledItem[] {
+    return this.all(`SELECT * FROM world_schedule WHERE game_id = :gameId ${status ? 'AND status = :status' : ''} ORDER BY due_game_time, rowid`,
+      status ? { gameId, status } : { gameId }).map(mapScheduled);
+  }
+
   insertRecurringPayment(r: RecurringPayment): void {
     this.run(
       `INSERT INTO recurring_payments (id, game_id, from_account_id, to_account_id, description, amount_cents, next_due_game_time, active, created_at)
@@ -449,13 +483,13 @@ export class Store {
   }
   insertDecision(d: DecisionRecord): void {
     this.run(
-      `INSERT INTO decisions (id, game_id, turn_id, offer_id, character_id, outcome, final_score, roll, seed, reasons_json, detail_json, game_time, created_at)
-       VALUES (:id, :gameId, :turnId, :offerId, :characterId, :outcome, :finalScore, :roll, :seed, :reasons, :detail, :gameTime, :createdAt)`,
+      `INSERT INTO decisions (id, game_id, turn_id, offer_id, thread_id, domain, character_id, outcome, final_score, roll, seed, reasons_json, detail_json, game_time, created_at)
+       VALUES (:id, :gameId, :turnId, :offerId, :threadId, :domain, :characterId, :outcome, :finalScore, :roll, :seed, :reasons, :detail, :gameTime, :createdAt)`,
       { ...d, reasons: json(d.reasons), detail: json(d.detail) });
   }
   listDecisions(gameId: string): DecisionRecord[] {
     return this.all('SELECT * FROM decisions WHERE game_id = :gameId ORDER BY rowid', { gameId }).map((r) => ({
-      id: r.id, gameId: r.game_id, turnId: r.turn_id, offerId: r.offer_id, characterId: r.character_id, outcome: r.outcome,
+      id: r.id, gameId: r.game_id, turnId: r.turn_id, offerId: r.offer_id, threadId: r.thread_id, domain: r.domain, characterId: r.character_id, outcome: r.outcome,
       finalScore: r.final_score, roll: r.roll, seed: r.seed, reasons: JSON.parse(r.reasons_json), detail: JSON.parse(r.detail_json),
       gameTime: r.game_time, createdAt: r.created_at,
     }));
@@ -589,20 +623,12 @@ function mapTransaction(r: Row): Transaction {
     description: r.description, category: r.category, gameTime: r.game_time, createdAt: r.created_at,
   };
 }
-function mapCompany(r: Row): Company {
-  return {
-    id: r.id, gameId: r.game_id, name: r.name, description: r.description, productStage: r.product_stage, totalShares: r.total_shares,
-    foundedGameTime: r.founded_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
-  };
-}
-function mapShareholding(r: Row): Shareholding {
-  return { companyId: r.company_id, characterId: r.character_id, shares: r.shares, role: r.role, acquiredGameTime: r.acquired_game_time };
-}
 function mapOffer(r: Row): Offer {
+  const terms = Object.fromEntries(Object.entries(parse<Record<string, number | null>>(r.terms_json)).filter(([, v]) => v !== null)) as Record<string, number>;
   return {
-    id: r.id, gameId: r.game_id, companyId: r.company_id, fromCharacterId: r.from_character_id, toCharacterId: r.to_character_id, kind: r.kind,
-    terms: parse(r.terms_json), description: r.description, status: r.status, parentOfferId: r.parent_offer_id, attempts: r.attempts,
-    lastOutcome: r.last_outcome, nextDecisionAfter: r.next_decision_after, createdGameTime: r.created_game_time,
+    id: r.id, gameId: r.game_id, kind: r.kind, fromCharacterId: r.from_character_id, toCharacterId: r.to_character_id, subjectRef: r.subject_ref,
+    label: r.label, terms, description: r.description, status: r.status, parentOfferId: r.parent_offer_id, attempts: r.attempts,
+    lastOutcome: r.last_outcome, nextDecisionAfter: r.next_decision_after, lastAppraisal: parse(r.last_appraisal_json), createdGameTime: r.created_game_time,
     resolvedGameTime: r.resolved_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -617,6 +643,20 @@ function mapRecurring(r: Row): RecurringPayment {
   return {
     id: r.id, gameId: r.game_id, fromAccountId: r.from_account_id, toAccountId: r.to_account_id, description: r.description, amountCents: r.amount_cents,
     nextDueGameTime: r.next_due_game_time, active: r.active === 1, createdAt: r.created_at,
+  };
+}
+function mapThread(r: Row): StoryThread {
+  return {
+    id: r.id, gameId: r.game_id, title: r.title, summary: r.summary, status: r.status, momentum: r.momentum, urgency: r.urgency,
+    visibility: r.visibility, participantIds: parse(r.participants_json), causeEventIds: parse(r.cause_event_ids_json),
+    resolution: parse(r.resolution_json), outcome: r.outcome, createdGameTime: r.created_game_time, updatedGameTime: r.updated_game_time,
+    resolvedGameTime: r.resolved_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function mapScheduled(r: Row): ScheduledItem {
+  return {
+    id: r.id, gameId: r.game_id, dueGameTime: r.due_game_time, kind: r.kind, payload: parse(r.payload_json), threadId: r.thread_id,
+    status: r.status, createdGameTime: r.created_game_time, createdAt: r.created_at,
   };
 }
 function mapTurn(r: Row): TurnRow {

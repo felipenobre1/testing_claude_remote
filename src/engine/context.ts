@@ -41,6 +41,8 @@ export interface NpcContextInput {
   economy?: string; // companies this NPC is part of, offers and promises involving them (built by the economy planner)
   privateSituation?: string; // this NPC's own decision state (they know their own limits); never shown to anyone else
   resolvedDecision?: string; // engine-resolved outcome to portray (portrayal call only)
+  situations?: string; // story threads this NPC is part of
+  world?: string; // setting line from the game pack
 }
 
 export interface NpcPerspective {
@@ -165,7 +167,7 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
 
   return [
     'CURRENT SITUATION',
-    `It is ${formatGameTime(input.gameTime)} in Milan.`,
+    `It is ${formatGameTime(input.gameTime)} (${input.world ?? 'the world'}).`,
     channelLine(input.channel, p.partner.name, input.sceneLocation),
     `You live in / are based in: ${npc.location}.`,
     '',
@@ -194,8 +196,11 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
     'WHAT YOU KNOW OR BELIEVE (topic key: belief)',
     list(p.knowledge.map((k) => `${k.item.topic}: ${k.item.belief} (confidence ${k.item.confidence}; ${k.item.source})`)),
     '',
-    'YOUR COMPANIES, OFFERS AND PROMISES (exact figures, kept by the game)',
+    'YOUR AFFAIRS: HOLDINGS, OFFERS AND PROMISES (exact figures, kept by the game)',
     input.economy || '(none)',
+    '',
+    'SITUATIONS IN YOUR LIFE',
+    input.situations || '(nothing in particular)',
     '',
     ...(input.privateSituation ? ['YOUR PRIVATE SITUATION (only you know this)', input.privateSituation, ''] : []),
     ...(input.resolvedDecision ? ['YOUR DECISION (already settled — express it)', input.resolvedDecision, ''] : []),
@@ -231,6 +236,7 @@ export interface PlayerPerspective {
   knownCharacters: Character[];
   interaction: Interaction | null;
   conversation: TranscriptLine[];
+  news: GameEvent[]; // recent messages and world events the player actually observed
 }
 
 export function retrievePlayerPerspective(store: Store, gameId: string): PlayerPerspective {
@@ -249,17 +255,19 @@ export function retrievePlayerPerspective(store: Store, gameId: string): PlayerP
     knownCharacters: store.listCharacters(gameId).filter((c) => !c.isPlayer),
     interaction,
     conversation,
+    news: store.listEventsObservedBy(player.id).filter((e) => ['message', 'thread_resolved', 'thread_started', 'decision', 'promise_overdue'].includes(e.type)).slice(-6),
   };
 }
 
-export function renderPlayerBriefing(p: PlayerPerspective, input: string, economy = ''): string {
+export function renderPlayerBriefing(p: PlayerPerspective, input: string, economy = '', world = ''): string {
   const names = new Map(p.knownCharacters.map((c) => [c.id, c.name]));
   const partner = p.interaction?.participantIds.filter((id) => id !== p.player.id).map((id) => names.get(id) ?? id) ?? [];
   return [
     `PLAYER CHARACTER: ${p.player.name}, ${p.player.age}. ${p.player.background}`,
     `${p.player.name.toUpperCase()}'S SITUATION: ${p.facts.map((f) => `${f.predicate}=${f.value}`).join('; ')}`,
-    `MONEY, COMPANIES AND PROMISES:\n${economy || '(none)'}`,
-    `TIME: ${formatGameTime(p.gameTime)} (Milan)`,
+    `RESOURCES, OFFERS AND PROMISES:\n${economy || '(none)'}`,
+    `RECENT MESSAGES AND NEWS:\n${p.news.map((e) => `[${e.gameTime}] ${e.summary}`).join('\n') || '(none)'}`,
+    `TIME: ${formatGameTime(p.gameTime)} (${world})`,
     `LOCATION: ${p.scene.location}. ${p.scene.description}`,
     `KNOWN CHARACTERS: ${p.knownCharacters.map((c) => `${c.name} (${c.role})`).join('; ') || '(none yet)'}`,
     `OPEN CONVERSATION: ${p.interaction ? `${p.interaction.channel} with ${partner.join(', ')}` : 'none'}`,

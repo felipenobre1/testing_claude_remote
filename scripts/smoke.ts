@@ -13,6 +13,7 @@ import type { Trace } from '../src/engine/trace.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { OpenAIProvider } from '../src/llm/openai.ts';
 import { HttpPageFetcher } from '../src/engine/web.ts';
+import { companyRepo } from '../src/packs/startup/company.ts';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/provider.ts';
 
 if (!process.env.OPENAI_API_KEY) {
@@ -53,7 +54,7 @@ const MONEY = /2[.,]?500|two and a half|duemilacinquecento|10[.,]?000/i;
 async function session(label: string, inputs: string[], gameId?: string) {
   const store = new Store(dbPath);
   const llm = new Recording(new OpenAIProvider());
-  const engine = new Engine(store, llm, { fetcher: new HttpPageFetcher() });
+  const engine = new Engine(store, llm, { fetcher: new HttpPageFetcher(), director: true });
   let id = gameId;
   if (!id) {
     const g = engine.newGame();
@@ -150,10 +151,10 @@ const s3 = await session('Session 3 (Milestone 2: the company)', [
   'I hang up and spend the next week building the prototype.',
 ], gameId);
 const st = s3.store;
-const companies = st.listCompanies(gameId);
+const companies = companyRepo.list(st, gameId);
 check(structural, 'Company exists after founding', companies.length === 1, companies.map((c) => c.name).join(', '));
 for (const c of companies) {
-  const sum = st.listShareholdings(c.id).reduce((n, h) => n + h.shares, 0);
+  const sum = companyRepo.holdings(st, c.id).reduce((n, h) => n + h.shares, 0);
   check(structural, `${c.name}: shareholdings add up to total shares`, sum === c.totalShares, `${sum} / ${c.totalShares}`);
 }
 const accounts = st.listAccounts(gameId);
@@ -163,7 +164,7 @@ const outflow = txs.filter((x) => !x.toAccountId).reduce((n, x) => n + x.amountC
 const inflow = txs.filter((x) => !x.fromAccountId).reduce((n, x) => n + x.amountCents, 0);
 check(structural, 'Ledger balances (accounts = €2,500 − spent + received)', accounts.reduce((n, a) => n + a.balanceCents, 0) === 250_000 - outflow + inflow);
 const offers = st.listOffers(gameId);
-check(behavioural, 'Interpreter turned the offer into an offer_equity action', offers.length > 0, offers.map((o) => `${o.kind} ${o.terms.equityPercent ?? ''}% ${o.status} (${o.lastOutcome ?? '-'})`).join(', '));
+check(behavioural, 'Interpreter turned the offer into a make_offer action', offers.length > 0, offers.map((o) => `${o.kind} ${JSON.stringify(o.terms)} ${o.status} (${o.lastOutcome ?? '-'})`).join(', '));
 check(behavioural, 'Matteo made a decision on the offer (or is still considering)', offers.some((o) => o.status !== 'pending'), offers.map((o) => o.status).join(', '));
 check(behavioural, 'The promise was recorded as an obligation', st.listObligations(gameId).length > 0);
 check(behavioural, 'A week of work moved the clock by days', (st.getGame(gameId)!.gameTime.slice(0, 10)) > '2026-09-28', st.getGame(gameId)!.gameTime);

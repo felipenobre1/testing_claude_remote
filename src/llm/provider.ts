@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-export type LLMTask = 'interpret' | 'generate_character' | 'npc_turn' | 'decision_state' | 'npc_appraise';
+export type LLMTask = 'interpret' | 'generate_character' | 'npc_turn' | 'decision_state' | 'npc_appraise' | 'director';
 
 /**
  * One structured completion. The engine builds the prompts (so traces show exactly what was sent);
