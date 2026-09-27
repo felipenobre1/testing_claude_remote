@@ -285,7 +285,7 @@ export class Engine {
     }
 
     // 7. Commit atomically, then respond.
-    const parts = [interp.narration.trim()];
+    const parts = [interp.narration.trim() || (!npcOut && interp.privateThought ? 'You turn the thought over in your head for a while.' : '')];
     if (npcOut && target) {
       if (npcOut.perceivable.trim()) parts.push(npcOut.perceivable.trim());
       if (npcOut.dialogue.trim()) parts.push(`${target.name}: “${npcOut.dialogue.trim()}”`);

@@ -17,7 +17,8 @@ Split the input into what is observable and what is private:
 - intents: every intent present: start_conversation, speak, private_thought, end_conversation, general_action.
 - newLocation: only when ${playerName} moves somewhere (e.g. "Home — balcony"). null otherwise.
 - minutesElapsed: realistic minutes for ${playerName}'s own actions this turn (0 for just talking).
-- narration: 0–3 short sentences in second person describing ONLY ${playerName}'s own actions and surroundings. Never describe another character's words, reactions, or whether a call is answered. Empty string when ${playerName} only speaks.
+- narration: 1–4 short sentences in second person describing ONLY ${playerName}'s own actions, thoughts and surroundings. When nobody else is involved (thinking, planning, acting alone), ALWAYS narrate: reflect the moment back vividly — the idea taking shape, what ${playerName} does next, the room around them — without inventing outcomes, other people's reactions, or facts. Never describe another character's words, reactions, or whether a call is answered. Use an empty string only when ${playerName} just speaks to someone in an ongoing conversation.
+- Past events the player mentions (e.g. "after talking to Marco yesterday") are the player's own recollection; keep them in privateThought or narration, do not treat them as contacting that person.
 - clarificationQuestion: null in almost every case. Only ask when ambiguity would change important persistent state (for example two known people could be meant) and there is no safe reasonable interpretation. Prefer a conservative reasonable interpretation.
 
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;
