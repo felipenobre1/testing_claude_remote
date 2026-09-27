@@ -119,8 +119,10 @@ export class Engine {
     const open = pp.interaction && !pp.interaction.endedGameTime ? pp.interaction : null;
     let target: Character | undefined;
     let pending: PendingCharacter | undefined;
+    const intents = new Set(interp.intents);
+    const contacting = intents.has('start_conversation') || Boolean(interp.spokenText);
     const targetName = interp.target?.name;
-    if (targetName && !sameName(targetName, player.name)) {
+    if (targetName && !sameName(targetName, player.name) && contacting) {
       const matches = findByName(npcs, targetName);
       if (matches.length > 1) {
         trace.resolution = { kind: 'ambiguous', name: targetName, candidates: matches.map((c) => c.id) };
@@ -134,6 +136,8 @@ export class Engine {
         target = pending.character;
         trace.resolution = { kind: 'generated', name: targetName, characterId: target.id };
       }
+    } else if (targetName && !contacting) {
+      trace.resolution = { kind: 'none', name: targetName }; // mentioned, not contacted: nobody is created
     } else if (open && interp.spokenText) {
       target = store.getCharacter(open.participantIds.find((id) => id !== player.id)!);
       trace.resolution = { kind: 'open_conversation', characterId: target?.id };
@@ -142,7 +146,6 @@ export class Engine {
     }
 
     // 3. Conversation bookkeeping.
-    const intents = new Set(interp.intents);
     const t0 = game.gameTime;
     const t1 = addMinutes(t0, interp.minutesElapsed);
     const location = interp.newLocation ?? pp.scene.location;
@@ -169,7 +172,6 @@ export class Engine {
 
     let interaction: Interaction | null = open;
     let startedNew = false;
-    const contacting = intents.has('start_conversation') || Boolean(interp.spokenText);
     if (target && contacting && (!open || !open.participantIds.includes(target.id))) {
       if (open) endInteraction(open, t0, player.name);
       interaction = {
@@ -227,17 +229,18 @@ export class Engine {
     const endRequested = intents.has('end_conversation') && !startedNew;
     const npcShouldRespond = target && interaction && (startedNew || Boolean(interp.spokenText));
     if (npcShouldRespond && target && interaction) {
+      // What the NPC perceives this turn, in order. Never the raw input, never private thoughts.
       const pendingLines: TranscriptLine[] = [];
+      if (startedNew) pendingLines.push(plan.events.find((e) => e.type === 'conversation_started')!.transcript[0]!);
+      if (interaction.channel === 'in_person' && interp.visibleAction) {
+        pendingLines.push({ speakerId: null, speakerName: null, text: `${player.name} ${interp.visibleAction}` });
+      }
       if (interp.spokenText) pendingLines.push({ speakerId: player.id, speakerName: player.name, text: interp.spokenText });
       if (endRequested) pendingLines.push({ speakerId: null, speakerName: null, text: `${player.name} is wrapping up the ${label(interaction.channel)}.` });
       const ctxInput: NpcContextInput = {
         npcId: target.id, partner: player, channel: interaction.channel, interactionId: startedNew ? null : interaction.id,
         pendingLines, gameTime: t1, sceneLocation: location, pending,
       };
-      if (startedNew) ctxInput.pendingLines.unshift(plan.events.find((e) => e.type === 'conversation_started')!.transcript[0]!);
-      if (interaction.channel === 'in_person' && interp.visibleAction) {
-        ctxInput.pendingLines.unshift({ speakerId: null, speakerName: null, text: `${player.name} ${interp.visibleAction}` });
-      }
       const perspective = retrieveNpcPerspective(store, ctxInput);
       trace.retrieval = perspectiveTrace(perspective);
 

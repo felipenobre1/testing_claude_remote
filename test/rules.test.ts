@@ -235,7 +235,21 @@ test('an in-person visible action is perceived by the person present', async () 
     .enqueue('npc_turn', npc({ dialogue: 'A business plan? You?' }));
   const r = await s.engine.takeTurn({ gameId: game.id, input: 'I meet Matteo at the bar, slide a printed business plan over and say "read this".' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.match(lastPrompt(s.llm, 'npc_turn'), /slides a printed business plan/);
-  assert.match(lastPrompt(s.llm, 'npc_turn'), /You are with Felipe in person/);
+  const prompt = lastPrompt(s.llm, 'npc_turn');
+  assert.match(prompt, /\[Felipe meets Matteo Ferrari\.\]\n\[Felipe slides a printed business plan across the table\]\nFelipe: Read this\./);
+  assert.match(prompt, /You are with Felipe in person/);
+  s.close();
+});
+
+test('a person who is only mentioned, not contacted, is not created', async () => {
+  const s = openSession(tmpDbPath());
+  const { game } = s.engine.newGame();
+  s.llm.enqueue('interpret', interp({
+    intents: ['private_thought'], target: { name: 'Giulia', relationHint: 'ex-girlfriend' }, privateThought: 'I wonder whether Giulia would like my idea.',
+  }));
+  const r = await s.engine.takeTurn({ gameId: game.id, input: 'I wonder whether Giulia would like my idea.' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.equal(s.llm.callsFor('generate_character').length, 0);
+  assert.equal(s.store.listCharacters(game.id).length, 1);
   s.close();
 });

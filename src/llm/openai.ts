@@ -10,6 +10,8 @@ export interface OpenAIProviderOptions {
   /** Per-task reasoning effort. Interpretation is a simple parsing job; NPC turns need more judgement. */
   effort?: Partial<Record<LLMTask, Effort>>;
   timeoutMs?: number;
+  baseURL?: string;
+  maxRetries?: number;
 }
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
@@ -24,7 +26,7 @@ export class OpenAIProvider implements LLMProvider {
   constructor(opts: OpenAIProviderOptions = {}) {
     const apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) throw new LLMError('config', 'OPENAI_API_KEY is not set');
-    this.client = new OpenAI({ apiKey, timeout: opts.timeoutMs ?? 120_000, maxRetries: 2 });
+    this.client = new OpenAI({ apiKey, baseURL: opts.baseURL, timeout: opts.timeoutMs ?? 120_000, maxRetries: opts.maxRetries ?? 2 });
     this.model = opts.model ?? process.env.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL;
     this.effort = {
       interpret: (process.env.OPENAI_EFFORT_INTERPRET as Effort) ?? 'low',

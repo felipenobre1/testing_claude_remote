@@ -29,7 +29,7 @@ export interface LLMProvider {
 export class LLMError extends Error {
   readonly kind: string;
   constructor(kind: string, message: string) {
-    super(message);
+    super(`[${kind}] ${message}`);
     this.name = 'LLMError';
     this.kind = kind;
   }
