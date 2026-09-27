@@ -295,4 +295,81 @@ export const MIGRATIONS: string[] = [
     FROM facts WHERE predicate = 'cash_eur';
   DELETE FROM facts WHERE predicate IN ('cash_eur', 'company');
   `,
+
+  /* v4 — independent NPC decisions: generic offers, decision states, resolved decisions */ `
+  -- Offers become generic deals (cofounder, job, customer purchase, investment).
+  CREATE TABLE offers_v4 (
+    id                  TEXT PRIMARY KEY,
+    game_id             TEXT NOT NULL REFERENCES games(id),
+    company_id          TEXT REFERENCES companies(id),
+    from_character_id   TEXT NOT NULL REFERENCES characters(id),
+    to_character_id     TEXT NOT NULL REFERENCES characters(id),
+    kind                TEXT NOT NULL CHECK (kind IN ('join_company', 'hire', 'purchase', 'investment')),
+    terms_json          TEXT NOT NULL,  -- { equityPercent, salaryMonthlyCents, priceMonthlyCents, amountCents, role }
+    description         TEXT NOT NULL,
+    status              TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'countered', 'withdrawn')),
+    parent_offer_id     TEXT,           -- set on counter-offers
+    attempts            INTEGER NOT NULL DEFAULT 0,  -- how many times the recipient has resolved it
+    last_outcome        TEXT,
+    next_decision_after TEXT,           -- game time before which the recipient won't reconsider
+    created_game_time   TEXT NOT NULL,
+    resolved_game_time  TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+  );
+  INSERT INTO offers_v4 (id, game_id, company_id, from_character_id, to_character_id, kind, terms_json, description, status,
+      parent_offer_id, attempts, last_outcome, next_decision_after, created_game_time, resolved_game_time, created_at, updated_at)
+    SELECT id, game_id, company_id, from_character_id, to_character_id, kind,
+      json_object('equityPercent', equity_percent, 'salaryMonthlyCents', NULL, 'priceMonthlyCents', NULL, 'amountCents', NULL, 'role', role),
+      'join as ' || role, status, NULL, 0, NULL, NULL, created_game_time, resolved_game_time, created_at, updated_at
+    FROM offers;
+  DROP TABLE offers;
+  ALTER TABLE offers_v4 RENAME TO offers;
+
+  -- Recurring payments can now flow in (customer subscriptions) or between accounts (salaries).
+  CREATE TABLE recurring_v4 (
+    id                 TEXT PRIMARY KEY,
+    game_id            TEXT NOT NULL REFERENCES games(id),
+    from_account_id    TEXT REFERENCES accounts(id),  -- NULL = outside world pays
+    to_account_id      TEXT REFERENCES accounts(id),  -- NULL = outside world receives
+    description        TEXT NOT NULL,
+    amount_cents       INTEGER NOT NULL CHECK (amount_cents > 0),
+    next_due_game_time TEXT NOT NULL,
+    active             INTEGER NOT NULL DEFAULT 1,
+    created_at         TEXT NOT NULL,
+    CHECK (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
+  );
+  INSERT INTO recurring_v4 SELECT id, game_id, account_id, NULL, description, amount_cents, next_due_game_time, active, created_at FROM recurring_payments;
+  DROP TABLE recurring_payments;
+  ALTER TABLE recurring_v4 RENAME TO recurring_payments;
+
+  -- A character's private situation for one kind of decision. Hidden from the player.
+  CREATE TABLE decision_states (
+    game_id      TEXT NOT NULL REFERENCES games(id),
+    character_id TEXT NOT NULL REFERENCES characters(id),
+    domain       TEXT NOT NULL,          -- offer kind
+    state_json   TEXT NOT NULL,
+    source       TEXT NOT NULL CHECK (source IN ('generated', 'seed')),
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (character_id, domain)
+  );
+
+  -- Every engine-resolved decision, with its inputs (debug) and outcome (canonical).
+  CREATE TABLE decisions (
+    id           TEXT PRIMARY KEY,
+    game_id      TEXT NOT NULL REFERENCES games(id),
+    turn_id      TEXT NOT NULL,
+    offer_id     TEXT NOT NULL REFERENCES offers(id),
+    character_id TEXT NOT NULL REFERENCES characters(id),
+    outcome      TEXT NOT NULL,
+    final_score  INTEGER NOT NULL,
+    roll         INTEGER NOT NULL,
+    seed         TEXT NOT NULL,
+    reasons_json TEXT NOT NULL,
+    detail_json  TEXT NOT NULL,
+    game_time    TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+  );
+  `,
 ];

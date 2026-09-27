@@ -163,7 +163,7 @@ const outflow = txs.filter((x) => !x.toAccountId).reduce((n, x) => n + x.amountC
 const inflow = txs.filter((x) => !x.fromAccountId).reduce((n, x) => n + x.amountCents, 0);
 check(structural, 'Ledger balances (accounts = €2,500 − spent + received)', accounts.reduce((n, a) => n + a.balanceCents, 0) === 250_000 - outflow + inflow);
 const offers = st.listOffers(gameId);
-check(behavioural, 'Interpreter turned the offer into an offer_equity action', offers.length > 0, offers.map((o) => `${o.equityPercent}% ${o.status}`).join(', '));
+check(behavioural, 'Interpreter turned the offer into an offer_equity action', offers.length > 0, offers.map((o) => `${o.kind} ${o.terms.equityPercent ?? ''}% ${o.status} (${o.lastOutcome ?? '-'})`).join(', '));
 check(behavioural, 'Matteo made a decision on the offer (or is still considering)', offers.some((o) => o.status !== 'pending'), offers.map((o) => o.status).join(', '));
 check(behavioural, 'The promise was recorded as an obligation', st.listObligations(gameId).length > 0);
 check(behavioural, 'A week of work moved the clock by days', (st.getGame(gameId)!.gameTime.slice(0, 10)) > '2026-09-28', st.getGame(gameId)!.gameTime);

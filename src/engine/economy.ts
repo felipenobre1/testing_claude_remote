@@ -1,9 +1,10 @@
 import type { Store } from '../db/store.ts';
-import type { PlayerAction } from '../domain/schemas.ts';
+import type { DecisionState, PlayerAction } from '../domain/schemas.ts';
 import {
   PRODUCT_STAGES, type Account, type Character, type Company, type GameEvent, type Interaction, type Obligation, type Offer,
-  type RecurringPayment, type Shareholding, type Transaction,
+  type DecisionRecord, type OfferTerms, type RecurringPayment, type Shareholding, type Transaction,
 } from '../domain/types.ts';
+import { MAX_ATTEMPTS, reconsiderAfterMinutes, type Resolution } from './decision.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 
 // ============================================================================
@@ -38,7 +39,9 @@ export type PlannedOp =
   | { op: 'update_company'; company: Company }
   | { op: 'add_shareholding'; holding: Shareholding }
   | { op: 'create_offer'; offer: Offer }
-  | { op: 'resolve_offer'; offerId: string; status: 'accepted' | 'rejected'; gameTime: string }
+  | { op: 'update_offer'; offer: Offer }
+  | { op: 'insert_decision'; decision: DecisionRecord }
+  | { op: 'upsert_decision_state'; gameId: string; characterId: string; domain: string; state: DecisionState }
   | { op: 'create_obligation'; obligation: Obligation }
   | { op: 'update_obligation'; obligation: Obligation }
   | { op: 'create_recurring'; recurring: RecurringPayment }
@@ -98,7 +101,9 @@ export class EconomyPlanner {
   allOffers() { return [...this.offers.values()]; }
   allObligations() { return [...this.obligations.values()]; }
   companiesOf(characterId: string) { return [...this.companies.values()].filter((c) => this.holdingsOf(c.id).some((h) => h.characterId === characterId)); }
-  recurringFor(accountId: string) { return [...this.recurring.values()].filter((r) => r.accountId === accountId && r.active); }
+  recurringFor(accountId: string) { return [...this.recurring.values()].filter((r) => r.fromAccountId === accountId && r.active); }
+  incomeFor(accountId: string) { return [...this.recurring.values()].filter((r) => r.toAccountId === accountId && r.active); }
+  describeOffer(o: Offer): string { return describeOffer(o, o.companyId ? this.company(o.companyId)?.name ?? 'the company' : 'the company'); }
   private character(name: string): Character | undefined {
     const n = name.trim().toLowerCase();
     return this.ctx.characters.find((c) => c.name.toLowerCase() === n) ?? this.ctx.characters.find((c) => c.name.toLowerCase().split(' ')[0] === n.split(' ')[0]);
@@ -160,10 +165,7 @@ export class EconomyPlanner {
         if (p.account.balanceCents < cents) return this.reject(a, `Can't pay ${eur(cents)} for ${a.description}: ${p.label === 'you' ? 'you have' : `${p.label} has`} only ${eur(p.account.balanceCents)}.`), null;
         this.move(p.account, null, cents, a.description, a.recurringMonthly ? 'recurring' : 'expense');
         if (a.recurringMonthly) {
-          const r: RecurringPayment = { id: newId('rec'), gameId: this.ctx.gameId, accountId: p.account.id, description: a.description, amountCents: cents,
-            nextDueGameTime: addMonths(this.ctx.gameTime, 1), active: true, createdAt: this.ctx.now };
-          this.recurring.set(r.id, r);
-          this.ops.push({ op: 'create_recurring', recurring: { ...r } });
+          this.addRecurring(p.account, null, a.description, cents);
         }
         this.event('money', `${p.label === 'you' ? player.name : p.label} paid ${eur(cents)} for ${a.description}${a.recurringMonthly ? ' (monthly)' : ''}.`, [me], [{ characterId: me, role: 'actor' }], 1);
         this.results.push(`✓ Paid ${eur(cents)} — ${a.description}${a.recurringMonthly ? ' (every month)' : ''} · ${p.label === 'you' ? 'your cash' : `${p.label} cash`} ${eur(p.account.balanceCents)}`);
@@ -215,21 +217,48 @@ export class EconomyPlanner {
         this.results.push(`✓ Invested ${eur(cents)} in ${c.name} · company cash ${eur(acct.balanceCents)} · your cash ${eur(personal.balanceCents)}`);
         return null;
       }
-      case 'offer_equity': {
+      case 'make_offer': {
         const to = this.character(a.toCharacterName);
-        if (!to || to.id === me) return `offer_equity: unknown person "${a.toCharacterName}"`;
+        if (!to || to.id === me) return `make_offer: unknown person "${a.toCharacterName}"`;
         const c = this.companyByName(a.companyName);
         if (!c) return this.reject(a, `There is no company called "${a.companyName}" yet — found it first.`), null;
-        if (!(a.percent > 0 && a.percent < 100)) return 'offer_equity: percent must be between 0 and 100';
         if (!this.holdingsOf(c.id).some((h) => h.characterId === me)) return this.reject(a, `You are not a shareholder of ${c.name}.`), null;
-        if (this.holdingsOf(c.id).some((h) => h.characterId === to.id)) return this.reject(a, `${to.name} already owns part of ${c.name}.`), null;
         if (!this.inConversation(to.id)) return this.reject(a, `You need to be talking to ${to.name} to make an offer.`), null;
-        const offer: Offer = { id: newId('offer'), gameId: this.ctx.gameId, companyId: c.id, fromCharacterId: me, toCharacterId: to.id, kind: 'join_company',
-          equityPercent: a.percent, role: a.role, status: 'pending', createdGameTime: this.ctx.gameTime, resolvedGameTime: null, createdAt: this.ctx.now, updatedAt: this.ctx.now };
+        const terms: OfferTerms = {
+          equityPercent: a.equityPercent, role: a.role,
+          salaryMonthlyCents: a.salaryMonthlyEur ? toCents(a.salaryMonthlyEur) : null,
+          priceMonthlyCents: a.priceMonthlyEur ? toCents(a.priceMonthlyEur) : null,
+          amountCents: a.amountEur ? toCents(a.amountEur) : null,
+        };
+        const bad = checkTerms(a.kind, terms);
+        if (bad) return `make_offer: ${bad}`;
+        if ((a.kind === 'join_company' || a.kind === 'investment') && this.holdingsOf(c.id).some((h) => h.characterId === to.id)) {
+          return this.reject(a, `${to.name} already owns part of ${c.name}.`), null;
+        }
+        if (this.allOffers().some((o) => o.status === 'pending' && o.toCharacterId === to.id && o.kind === a.kind && o.companyId === c.id)) {
+          return this.reject(a, `${to.name} still owes you an answer on your previous offer.`), null;
+        }
+        const offer: Offer = {
+          id: newId('offer'), gameId: this.ctx.gameId, companyId: c.id, fromCharacterId: me, toCharacterId: to.id, kind: a.kind, terms,
+          description: a.description, status: 'pending', parentOfferId: null, attempts: 0, lastOutcome: null, nextDecisionAfter: null,
+          createdGameTime: this.ctx.gameTime, resolvedGameTime: null, createdAt: this.ctx.now, updatedAt: this.ctx.now,
+        };
         this.offers.set(offer.id, offer);
         this.ops.push({ op: 'create_offer', offer: { ...offer } });
-        this.event('offer_made', `${player.name} offered ${to.name} ${a.percent}% of ${c.name} as ${a.role}.`, [me, to.id], [{ characterId: me, role: 'actor' }, { characterId: to.id, role: 'addressee' }], 4);
-        this.results.push(`→ Offer to ${to.name}: ${a.percent}% of ${c.name} as ${a.role} (waiting for their answer)`);
+        this.event('offer_made', `${player.name} offered ${to.name}: ${this.describeOffer(offer)}.`, [me, to.id], [{ characterId: me, role: 'actor' }, { characterId: to.id, role: 'addressee' }], 4);
+        this.results.push(`→ Offer to ${to.name}: ${this.describeOffer(offer)}`);
+        return null;
+      }
+      case 'respond_to_offer': {
+        const o = this.offer(a.offerId);
+        if (!o || o.toCharacterId !== me) return `respond_to_offer: no offer ${a.offerId} made to the player`;
+        if (o.status !== 'pending') return this.reject(a, `That offer is already ${o.status}.`), null;
+        if (!this.inConversation(o.fromCharacterId)) return this.reject(a, `You need to be talking to ${this.name(o.fromCharacterId)} to answer their offer.`), null;
+        this.closeOffer(o, a.accept ? 'accepted' : 'rejected');
+        if (a.accept) this.execute(o);
+        else this.results.push(`✗ You turned down ${this.name(o.fromCharacterId)}'s offer (${this.describeOffer(o)}).`);
+        this.event('offer_resolved', `${player.name} ${a.accept ? 'accepted' : 'turned down'} ${this.name(o.fromCharacterId)}'s offer: ${this.describeOffer(o)}.`,
+          [me, o.fromCharacterId], [{ characterId: me, role: 'actor' }], 4);
         return null;
       }
       case 'make_promise': {
@@ -267,31 +296,131 @@ export class EconomyPlanner {
     }
   }
 
-  // ---------- NPC decisions (validated as model output, executed deterministically) ----------
-  npcRespondToOffer(npcId: string, offerId: string, accept: boolean): string | null {
-    const o = this.offer(offerId);
-    if (!o || o.toCharacterId !== npcId) return `respond_to_offer: no offer ${offerId} addressed to you`;
-    if (o.status !== 'pending') return `respond_to_offer: offer ${offerId} is already ${o.status}`;
-    const c = this.company(o.companyId)!;
-    o.status = accept ? 'accepted' : 'rejected';
-    this.ops.push({ op: 'resolve_offer', offerId: o.id, status: o.status, gameTime: this.ctx.gameTime });
+  // ---------- engine-resolved NPC decisions ----------
+  /** Offers waiting on this NPC that they may (re)consider now. */
+  decidableOffersFor(npcId: string): Offer[] {
+    return this.allOffers().filter((o) => o.toCharacterId === npcId && o.status === 'pending' && o.fromCharacterId === this.ctx.player.id
+      && (!o.nextDecisionAfter || o.nextDecisionAfter <= this.ctx.gameTime));
+  }
+
+  saveDecisionState(characterId: string, domain: string, state: DecisionState) {
+    this.ops.push({ op: 'upsert_decision_state', gameId: this.ctx.gameId, characterId, domain, state });
+  }
+
+  /**
+   * Applies an engine-resolved outcome. The NPC's portrayal supplies wording only
+   * (counter terms and conditions, already validated against the hard constraints).
+   */
+  applyDecision(offer: Offer, r: Resolution, extra: { counter: OfferTerms | null; condition: string | null; counterNote: string }) {
+    const o = this.offer(offer.id)!;
+    const npcId = o.toCharacterId;
     const npc = this.name(npcId);
-    if (!accept) {
-      this.event('offer_resolved', `${npc} turned down ${o.equityPercent}% of ${c.name}.`, [o.fromCharacterId, npcId], [{ characterId: npcId, role: 'actor' }], 4);
-      this.results.push(`✗ ${npc} declined the offer (${o.equityPercent}% of ${c.name}).`);
-      return null;
+    o.attempts += 1;
+    o.lastOutcome = r.outcome;
+    o.updatedAt = this.ctx.now;
+    const what = this.describeOffer(o);
+    const decision: DecisionRecord = {
+      id: newId('dec'), gameId: this.ctx.gameId, turnId: this.ctx.turnId, offerId: o.id, characterId: npcId, outcome: r.outcome,
+      finalScore: r.finalScore, roll: r.roll, seed: r.seed, reasons: r.reasons, detail: r, gameTime: this.ctx.gameTime, createdAt: this.ctx.now,
+    };
+    this.ops.push({ op: 'insert_decision', decision });
+
+    switch (r.outcome) {
+      case 'accept':
+      case 'accept_conditionally':
+        this.closeOffer(o, 'accepted');
+        this.execute(o);
+        if (r.outcome === 'accept_conditionally' && extra.condition) this.addObligation(this.ctx.player.id, npcId, `Condition for ${npc}: ${extra.condition}`, null, null, null);
+        break;
+      case 'counter': {
+        this.closeOffer(o, 'countered');
+        const counter: Offer = {
+          ...o, id: newId('offer'), fromCharacterId: npcId, toCharacterId: o.fromCharacterId, terms: extra.counter!, description: extra.counterNote || `counter-offer to: ${o.description}`,
+          status: 'pending', parentOfferId: o.id, attempts: 0, lastOutcome: null, nextDecisionAfter: null, createdGameTime: this.ctx.gameTime,
+          resolvedGameTime: null, createdAt: this.ctx.now, updatedAt: this.ctx.now,
+        };
+        this.offers.set(counter.id, counter);
+        this.ops.push({ op: 'create_offer', offer: { ...counter } });
+        this.results.push(`↩ ${npc} counter-offers: ${this.describeOffer(counter)} [${counter.id}]`);
+        break;
+      }
+      case 'reject':
+      case 'disengage':
+        this.closeOffer(o, 'rejected');
+        this.results.push(r.outcome === 'reject' ? `✗ ${npc} said no to: ${what}` : `✗ ${npc} isn't interested and has stepped away from: ${what}`);
+        break;
+      default: {
+        const wait = reconsiderAfterMinutes(r.outcome);
+        o.nextDecisionAfter = wait === null ? null : addMinutes(this.ctx.gameTime, wait);
+        if (o.attempts >= MAX_ATTEMPTS) {
+          this.closeOffer(o, 'rejected');
+          this.results.push(`✗ ${npc} has stopped considering: ${what}`);
+        } else {
+          this.ops.push({ op: 'update_offer', offer: { ...o } });
+          this.results.push(r.outcome === 'request_more_information' ? `… ${npc} wants to know more before deciding.`
+            : r.outcome === 'escalate_to_decision_maker' ? `… ${npc} can't decide alone and will take it to someone else.`
+            : `… No decision yet from ${npc}.`);
+        }
+      }
     }
-    // New shares are issued so the newcomer owns exactly equityPercent after issuance (everyone else is diluted).
-    const newShares = Math.round((c.totalShares * o.equityPercent) / (100 - o.equityPercent));
-    const holding: Shareholding = { companyId: c.id, characterId: npcId, shares: newShares, role: o.role, acquiredGameTime: this.ctx.gameTime };
-    c.totalShares += newShares;
-    c.updatedAt = this.ctx.now;
-    this.holdings.get(c.id)!.push(holding);
-    this.ops.push({ op: 'add_shareholding', holding: { ...holding } }, { op: 'update_company', company: { ...c } });
-    this.event('offer_resolved', `${npc} accepted ${o.equityPercent}% of ${c.name} and joined as ${o.role}.`, [o.fromCharacterId, npcId], [{ characterId: npcId, role: 'actor' }], 5);
-    const table = this.holdingsOf(c.id).map((h) => `${this.name(h.characterId)} ${pct(h.shares, c.totalShares)}`).join(', ');
-    this.results.push(`✓ ${npc} joined ${c.name} as ${o.role} · ownership: ${table}`);
-    return null;
+    this.event('decision', `${npc} responded to ${this.name(o.fromCharacterId)}'s offer (${what}): ${r.outcome.replace(/_/g, ' ')}.`,
+      [o.fromCharacterId, npcId], [{ characterId: npcId, role: 'actor' }], 4);
+  }
+
+  private closeOffer(o: Offer, status: Offer['status']) {
+    o.status = status;
+    o.resolvedGameTime = this.ctx.gameTime;
+    o.updatedAt = this.ctx.now;
+    this.ops.push({ op: 'update_offer', offer: { ...o } });
+  }
+
+  /** Executes an accepted deal. Direction doesn't matter: the non-player side is the counterparty. */
+  private execute(o: Offer) {
+    const me = this.ctx.player.id;
+    const otherId = o.fromCharacterId === me ? o.toCharacterId : o.fromCharacterId;
+    const other = this.name(otherId);
+    const c = this.company(o.companyId!)!;
+    const companyAcct = this.ensureAccount('company', c.id);
+    const t = o.terms;
+    const issue = (percent: number, role: string) => {
+      const newShares = Math.round((c.totalShares * percent) / (100 - percent));
+      const holding: Shareholding = { companyId: c.id, characterId: otherId, shares: newShares, role, acquiredGameTime: this.ctx.gameTime };
+      c.totalShares += newShares;
+      c.updatedAt = this.ctx.now;
+      this.holdings.get(c.id)!.push(holding);
+      this.ops.push({ op: 'add_shareholding', holding: { ...holding } }, { op: 'update_company', company: { ...c } });
+    };
+    const table = () => this.holdingsOf(c.id).map((h) => `${this.name(h.characterId)} ${pct(h.shares, c.totalShares)}`).join(', ');
+    switch (o.kind) {
+      case 'join_company':
+        issue(t.equityPercent!, t.role ?? 'cofounder');
+        if (t.salaryMonthlyCents) this.addRecurring(companyAcct, this.ensureAccount('character', otherId), `${other}'s salary`, t.salaryMonthlyCents);
+        this.results.push(`✓ ${other} joined ${c.name} as ${t.role ?? 'cofounder'} · ownership: ${table()}`);
+        break;
+      case 'hire':
+        this.addRecurring(companyAcct, this.ensureAccount('character', otherId), `${other}'s salary (${t.role ?? 'employee'})`, t.salaryMonthlyCents!);
+        this.results.push(`✓ ${other} works for ${c.name} as ${t.role ?? 'employee'} · ${eur(t.salaryMonthlyCents!)}/month from the company`);
+        break;
+      case 'purchase':
+        this.move(null, companyAcct, t.priceMonthlyCents!, `${other}: first month`, 'revenue');
+        this.addRecurring(null, companyAcct, `${other} subscription`, t.priceMonthlyCents!);
+        this.results.push(`✓ ${other} is now a paying customer of ${c.name} · ${eur(t.priceMonthlyCents!)}/month · company cash ${eur(companyAcct.balanceCents)}`);
+        break;
+      case 'investment':
+        this.move(null, companyAcct, t.amountCents!, `investment from ${other}`, 'investment');
+        issue(t.equityPercent!, 'investor');
+        this.results.push(`✓ ${other} invested ${eur(t.amountCents!)} in ${c.name} · ownership: ${table()} · company cash ${eur(companyAcct.balanceCents)}`);
+        break;
+    }
+  }
+
+  private addRecurring(from: Account | null, to: Account | null, description: string, cents: number) {
+    const r: RecurringPayment = {
+      id: newId('rec'), gameId: this.ctx.gameId, fromAccountId: from?.id ?? null, toAccountId: to?.id ?? null, description, amountCents: cents,
+      nextDueGameTime: addMonths(this.ctx.gameTime, 1), active: true, createdAt: this.ctx.now,
+    };
+    this.recurring.set(r.id, r);
+    this.ops.push({ op: 'create_recurring', recurring: { ...r } });
   }
 
   npcPromise(npcId: string, creditorId: string, description: string, amountEur: number | null, dueInDays: number | null): string | null {
@@ -339,10 +468,18 @@ export class EconomyPlanner {
     for (const r of [...this.recurring.values()].filter((x) => x.active)) {
       let guard = 0;
       while (r.nextDueGameTime <= to && guard++ < 24) {
-        const acct = this.accounts.get(r.accountId)!;
-        const owner = acct.ownerKind === 'company' ? this.company(acct.ownerId)?.name ?? 'company' : 'you';
+        const acct = r.fromAccountId ? this.accounts.get(r.fromAccountId)! : null;
+        const to = r.toAccountId ? this.accounts.get(r.toAccountId)! : null;
+        const ownerOf = (a: Account) => (a.ownerKind === 'company' ? this.company(a.ownerId)?.name ?? 'company' : a.ownerId === this.ctx.player.id ? 'you' : this.name(a.ownerId));
+        if (!acct) {
+          this.move(null, to, r.amountCents, `${r.description} (monthly)`, 'revenue', r.nextDueGameTime);
+          this.results.push(`⏰ ${formatGameTime(r.nextDueGameTime)}: ${r.description} ${eur(r.amountCents)} received by ${ownerOf(to!)} · balance ${eur(to!.balanceCents)}`);
+          r.nextDueGameTime = addMonths(r.nextDueGameTime, 1);
+          continue;
+        }
+        const owner = ownerOf(acct);
         if (acct.balanceCents >= r.amountCents) {
-          this.move(acct, null, r.amountCents, `${r.description} (monthly)`, 'recurring', r.nextDueGameTime);
+          this.move(acct, to, r.amountCents, `${r.description} (monthly)`, 'recurring', r.nextDueGameTime);
           this.results.push(`⏰ ${formatGameTime(r.nextDueGameTime)}: ${r.description} ${eur(r.amountCents)} charged to ${owner} · balance ${eur(acct.balanceCents)}`);
         } else {
           r.active = false;
@@ -378,7 +515,9 @@ export function applyOps(store: Store, ops: PlannedOp[], now: string): { table: 
       case 'update_company': store.updateCompany(o.company); writes.push({ table: 'companies', op: 'update', id: o.company.id, note: `${o.company.productStage}, ${o.company.totalShares} shares` }); break;
       case 'add_shareholding': store.insertShareholding(o.holding); writes.push({ table: 'shareholdings', op: 'insert', id: `${o.holding.companyId}/${o.holding.characterId}`, note: `${o.holding.shares} shares` }); break;
       case 'create_offer': store.insertOffer(o.offer); writes.push({ table: 'offers', op: 'insert', id: o.offer.id }); break;
-      case 'resolve_offer': store.resolveOffer(o.offerId, o.status, o.gameTime, now); writes.push({ table: 'offers', op: 'update', id: o.offerId, note: o.status }); break;
+      case 'update_offer': store.updateOffer(o.offer); writes.push({ table: 'offers', op: 'update', id: o.offer.id, note: `${o.offer.status}${o.offer.lastOutcome ? ` (${o.offer.lastOutcome})` : ''}` }); break;
+      case 'insert_decision': store.insertDecision(o.decision); writes.push({ table: 'decisions', op: 'insert', id: o.decision.id, note: o.decision.outcome }); break;
+      case 'upsert_decision_state': store.upsertDecisionState(o.gameId, o.characterId, o.domain, o.state, 'generated', now); writes.push({ table: 'decision_states', op: 'upsert', id: `${o.characterId}/${o.domain}` }); break;
       case 'create_obligation': store.insertObligation(o.obligation); writes.push({ table: 'obligations', op: 'insert', id: o.obligation.id }); break;
       case 'update_obligation': store.updateObligation(o.obligation); writes.push({ table: 'obligations', op: 'update', id: o.obligation.id, note: o.obligation.status }); break;
       case 'create_recurring': store.insertRecurringPayment(o.recurring); writes.push({ table: 'recurring_payments', op: 'insert', id: o.recurring.id }); break;
@@ -396,7 +535,8 @@ function companyLines(p: EconomyPlanner, c: Company, name: (id: string) => strin
   const acct = p.account('company', c.id);
   const table = p.holdingsOf(c.id).map((h) => `${name(h.characterId)} ${pct(h.shares, c.totalShares)} (${h.role})`).join(', ');
   const recurring = acct ? p.recurringFor(acct.id).map((r) => `${r.description} ${eur(r.amountCents)}/month`).join('; ') : '';
-  return [`${c.name} — ${c.description}`, `  stage: ${c.productStage} · company cash: ${eur(acct?.balanceCents ?? 0)} · owners: ${table}${recurring ? ` · monthly costs: ${recurring}` : ''}`];
+  const income = acct ? p.incomeFor(acct.id).map((r) => `${r.description} ${eur(r.amountCents)}/month`).join('; ') : '';
+  return [`${c.name} — ${c.description}`, `  stage: ${c.productStage} · company cash: ${eur(acct?.balanceCents ?? 0)} · owners: ${table}${recurring ? ` · monthly costs: ${recurring}` : ''}${income ? ` · monthly revenue: ${income}` : ''}`];
 }
 
 function obligationLine(o: Obligation, gameTime: string, name: (id: string) => string): string {
@@ -412,12 +552,12 @@ export function npcEconomyBriefing(p: EconomyPlanner, npcId: string, gameTime: s
   const offers = p.allOffers().filter((o) => o.toCharacterId === npcId || o.fromCharacterId === npcId);
   for (const o of offers) {
     ids.push(o.id);
-    const c = p.company(o.companyId)!;
+    const c = o.companyId ? p.company(o.companyId) : undefined;
     if (o.status === 'pending' && o.toCharacterId === npcId) {
-      lines.push(`PENDING OFFER [${o.id}] from ${name(o.fromCharacterId)}: ${o.equityPercent}% of ${c.name} as ${o.role}. About the company:`, ...companyLines(p, c, name).map((l) => `  ${l}`),
-        '  Decide with respond_to_offer only if you have actually made up your mind; otherwise keep talking.');
+      lines.push(`OFFER TO YOU [${o.id}] from ${name(o.fromCharacterId)}: ${p.describeOffer(o)} — "${o.description}"${o.lastOutcome ? ` (your last answer: ${o.lastOutcome.replace(/_/g, ' ')})` : ''}`);
+      if (c) lines.push('  About the company (as presented to you):', ...companyLines(p, c, name).map((l) => `  ${l}`));
     } else {
-      lines.push(`Offer ${name(o.fromCharacterId)} → ${name(o.toCharacterId)}: ${o.equityPercent}% of ${c.name} — ${o.status}`);
+      lines.push(`Offer ${name(o.fromCharacterId)} → ${name(o.toCharacterId)} [${o.id}]: ${p.describeOffer(o)} — ${o.status}`);
     }
   }
   for (const o of p.allObligations().filter((x) => x.debtorId === npcId || x.creditorId === npcId)) { ids.push(o.id); lines.push(obligationLine(o, gameTime, name)); }
@@ -431,8 +571,32 @@ export function playerEconomyBriefing(p: EconomyPlanner, playerId: string, gameT
   if (personal) for (const r of p.recurringFor(personal.id)) lines.push(`Personal monthly cost: ${r.description} ${eur(r.amountCents)}`);
   for (const c of p.companiesOf(playerId)) lines.push(...companyLines(p, c, name));
   for (const o of p.allOffers().filter((x) => x.fromCharacterId === playerId && x.status === 'pending')) {
-    lines.push(`Pending offer to ${name(o.toCharacterId)}: ${o.equityPercent}% of ${p.company(o.companyId)!.name}`);
+    lines.push(`Your pending offer to ${name(o.toCharacterId)}: ${p.describeOffer(o)}`);
+  }
+  for (const o of p.allOffers().filter((x) => x.toCharacterId === playerId && x.status === 'pending')) {
+    lines.push(`[${o.id}] Counter-offer from ${name(o.fromCharacterId)}: ${p.describeOffer(o)} — "${o.description}" (answer with respond_to_offer)`);
   }
   for (const o of p.allObligations().filter((x) => x.status === 'open' && (x.debtorId === playerId || x.creditorId === playerId))) lines.push(obligationLine(o, gameTime, name));
   return lines.join('\n');
+}
+
+export function describeOffer(o: Offer, companyName: string): string {
+  const t = o.terms;
+  switch (o.kind) {
+    case 'join_company': return `${t.equityPercent}% of ${companyName} as ${t.role ?? 'cofounder'}${t.salaryMonthlyCents ? ` + ${eur(t.salaryMonthlyCents)}/month` : ', no salary'}`;
+    case 'hire': return `job at ${companyName}${t.role ? ` as ${t.role}` : ''} for ${eur(t.salaryMonthlyCents ?? 0)}/month`;
+    case 'purchase': return `${companyName} subscription at ${eur(t.priceMonthlyCents ?? 0)}/month`;
+    case 'investment': return `${eur(t.amountCents ?? 0)} for ${t.equityPercent}% of ${companyName}`;
+  }
+}
+
+/** Required terms per kind of offer. */
+export function checkTerms(kind: Offer['kind'], t: OfferTerms): string | null {
+  const pctOk = (x: number | null) => x !== null && x > 0 && x < 100;
+  switch (kind) {
+    case 'join_company': return pctOk(t.equityPercent) ? null : 'join_company needs equityPercent between 0 and 100';
+    case 'hire': return t.salaryMonthlyCents && t.salaryMonthlyCents > 0 ? null : 'hire needs a monthly salary';
+    case 'purchase': return t.priceMonthlyCents && t.priceMonthlyCents > 0 ? null : 'purchase needs a monthly price';
+    case 'investment': return t.amountCents && t.amountCents > 0 && pctOk(t.equityPercent) ? null : 'investment needs an amount and an equity percentage';
+  }
 }

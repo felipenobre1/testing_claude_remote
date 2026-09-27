@@ -39,6 +39,8 @@ export interface NpcContextInput {
   pending?: PendingCharacter;
   pendingDocuments?: WebDocument[]; // pages opened this turn (shared by the partner)
   economy?: string; // companies this NPC is part of, offers and promises involving them (built by the economy planner)
+  privateSituation?: string; // this NPC's own decision state (they know their own limits); never shown to anyone else
+  resolvedDecision?: string; // engine-resolved outcome to portray (portrayal call only)
 }
 
 export interface NpcPerspective {
@@ -195,6 +197,8 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
     'YOUR COMPANIES, OFFERS AND PROMISES (exact figures, kept by the game)',
     input.economy || '(none)',
     '',
+    ...(input.privateSituation ? ['YOUR PRIVATE SITUATION (only you know this)', input.privateSituation, ''] : []),
+    ...(input.resolvedDecision ? ['YOUR DECISION (already settled — express it)', input.resolvedDecision, ''] : []),
     'WEB PAGES YOU HAVE OPENED (exactly as they looked when you opened them)',
     p.documents.length ? p.documents.map((d) => renderDocument(d.doc, d.openedNow)).join('\n\n') : '(none)',
     '',

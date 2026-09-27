@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { Store } from './db/store.ts';
-import { formatCharacter, formatContext, formatEvents, formatFacts, formatMoney, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
+import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
@@ -43,7 +43,8 @@ function inspect(store: Store, gameId: string, args: string[], full: boolean): s
     case 'events': return formatEvents(store, gameId);
     case 'facts': return formatFacts(store, gameId);
     case 'money': return formatMoney(store, gameId);
-    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts | money';
+    case 'decisions': return formatDecisions(store, gameId);
+    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts | money | decisions';
   }
 }
 

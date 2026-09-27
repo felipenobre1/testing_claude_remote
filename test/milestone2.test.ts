@@ -9,14 +9,14 @@ import { Store } from '../src/db/store.ts';
 import { formatStatusLine } from '../src/debug/inspect.ts';
 import type { Trace } from '../src/engine/trace.ts';
 import type { LLMRequest } from '../src/llm/provider.ts';
-import { interp, lastPrompt, MATTEO, npc, openSession, SOFIA, tmpDbPath } from './helpers.ts';
+import { fixedRng, interp, lastPrompt, MATTEO, MATTEO_KEEN, npc, openSession, seedDecisionState, SOFIA, tmpDbPath } from './helpers.ts';
 
 const onPhoneWithMatteo = { target: { name: 'Matteo Ferrari', relationHint: null } };
 const idFrom = (re: RegExp) => (req: LLMRequest) => req.user.match(re)?.[1] ?? 'missing';
 
 test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (t) => {
   const path = tmpDbPath();
-  const s1 = openSession(path);
+  const s1 = openSession(path, { rng: fixedRng(0.5) });
   const { game, player } = s1.engine.newGame();
   const gameId = game.id;
   const cash = (store = s1.store) => store.getAccountOf(gameId, 'character', player.id)!.balanceCents;
@@ -59,24 +59,30 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     assert.deepEqual(s1.store.listShareholdings(companyId).map((h) => [h.characterId, h.shares]), [[player.id, 1_000_000]]);
   });
 
-  await t.test('offer Matteo 40%; he decides; the engine issues shares (60/40)', async () => {
+  await t.test('offer Matteo 40%; the engine resolves his decision; shares are issued (60/40)', async () => {
+    seedDecisionState(s1.store, gameId, matteoId, 'join_company', MATTEO_KEEN);
     s1.llm
       .enqueue('interpret', interp({
         ...onPhoneWithMatteo, spokenText: 'Be my cofounder. 40% of Grade Economy.',
-        actions: [{ action: 'offer_equity', toCharacterName: 'Matteo Ferrari', companyName: 'Grade Economy', percent: 40, role: 'cofounder' }],
+        actions: [{ action: 'make_offer', toCharacterName: 'Matteo Ferrari', kind: 'join_company', companyName: 'Grade Economy', equityPercent: 40,
+          salaryMonthlyEur: null, priceMonthlyEur: null, amountEur: null, role: 'cofounder', description: 'Be my cofounder' }],
       }))
-      .enqueue('npc_turn', (req: LLMRequest) => npc({
+      .enqueue('npc_appraise', { factors: [
+        { factor: 'trust', value: 2, reason: 'known Felipe for years' },
+        { factor: 'offer_quality', value: 1, reason: '40% is fair' },
+        { factor: 'confidence_in_player', value: 2, reason: 'Felipe can code' },
+      ] })
+      .enqueue('npc_turn', npc({
+        expressedDecision: 'accept',
         dialogue: 'Ok. I\'m in. But weekends only until exams are over.',
         importance: 5,
-        changes: [
-          { op: 'respond_to_offer', offerId: idFrom(/PENDING OFFER \[(offer_\w+)\]/)(req), accept: true },
-          { op: 'make_promise', description: 'Write the landing page copy', amountEur: null, dueInDays: 3 },
-        ],
+        changes: [{ op: 'make_promise', description: 'Write the landing page copy', amountEur: null, dueInDays: 3 }],
       }));
     const r = await s1.engine.takeTurn({ gameId, input: 'I offer Matteo 40% as cofounder' });
     assert.equal(r.status, 'committed', r.error ?? '');
     const prompt = lastPrompt(s1.llm, 'npc_turn');
-    assert.match(prompt, /PENDING OFFER \[offer_\w+\] from Felipe: 40% of Grade Economy as cofounder/);
+    assert.match(prompt, /OFFER TO YOU \[offer_\w+\] from Felipe: 40% of Grade Economy as cofounder, no salary/);
+    assert.match(prompt, /YOUR DECISION \(already settled — express it\)\n.*\nOutcome: accept/);
     assert.match(prompt, /company cash: €500\.00 · owners: Felipe 100\.0% \(founder\)/);
 
     const holdings = s1.store.listShareholdings(companyId);
@@ -84,7 +90,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     assert.equal(s1.store.getCompany(companyId)!.totalShares, 1_666_667);
     assert.match(r.text, /✓ Matteo Ferrari joined Grade Economy as cofounder · ownership: Felipe 60\.0%, Matteo Ferrari 40\.0%/);
     assert.match(r.text, /✓ Promise recorded — Matteo Ferrari → Felipe: Write the landing page copy by/);
-    const joined = s1.store.listEvents(gameId).find((e) => e.type === 'offer_resolved')!;
+    const joined = s1.store.listEvents(gameId).find((e) => e.type === 'decision')!;
     assert.deepEqual(joined.observers.map((o) => o.characterId).sort(), [player.id, matteoId].sort());
   });
 
@@ -116,12 +122,12 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     assert.equal(cash(), before);
   });
 
-  await t.test('an NPC cannot accept the same offer twice or invent offers', async () => {
-    const bad = (req: LLMRequest) => npc({ changes: [{ op: 'respond_to_offer', offerId: s1.store.listOffers(gameId)[0]!.id, accept: true }] });
+  await t.test('an NPC cannot decide offers through state changes', async () => {
+    const bad = () => npc({ changes: [{ op: 'respond_to_offer', offerId: s1.store.listOffers(gameId)[0]!.id, accept: true }] });
     s1.llm.enqueue('interpret', interp({ ...onPhoneWithMatteo, spokenText: 'so we are good?' })).enqueue('npc_turn', bad, bad);
     const r = await s1.engine.takeTurn({ gameId, input: 'so we are good?' });
     assert.equal(r.status, 'failed');
-    assert.match(JSON.stringify((s1.store.lastTurn(gameId)!.trace as Trace).validation), /already accepted/);
+    assert.match(JSON.stringify((s1.store.lastTurn(gameId)!.trace as Trace).validation), /Offers are resolved by the decision engine/);
     assert.equal(s1.store.getCompany(companyId)!.totalShares, 1_666_667);
     s1.close();
   });
@@ -227,7 +233,7 @@ test('offers and promises need the other person to be in the conversation', asyn
       intents: ['general_action'],
       actions: [
         { action: 'found_company', name: 'Grade Economy', description: 'edtech', initialInvestmentEur: 0 },
-        { action: 'offer_equity', toCharacterName: 'Matteo', companyName: 'Grade Economy', percent: 30, role: 'cofounder' },
+        { action: 'make_offer', toCharacterName: 'Matteo', kind: 'join_company', companyName: 'Grade Economy', equityPercent: 30, salaryMonthlyEur: null, priceMonthlyEur: null, amountEur: null, role: 'cofounder', description: 'join me' },
       ],
     }));
   await s.engine.takeTurn({ gameId: game.id, input: 'call Matteo' });

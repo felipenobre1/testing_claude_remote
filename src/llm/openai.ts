@@ -32,6 +32,8 @@ export class OpenAIProvider implements LLMProvider {
       interpret: (process.env.OPENAI_EFFORT_INTERPRET as Effort) ?? 'low',
       generate_character: (process.env.OPENAI_EFFORT_GENERATE as Effort) ?? 'low',
       npc_turn: (process.env.OPENAI_EFFORT_NPC as Effort) ?? 'medium',
+      decision_state: (process.env.OPENAI_EFFORT_DECISION_STATE as Effort) ?? 'low',
+      npc_appraise: (process.env.OPENAI_EFFORT_APPRAISE as Effort) ?? 'medium',
       ...opts.effort,
     };
   }

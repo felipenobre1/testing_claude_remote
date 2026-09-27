@@ -36,7 +36,12 @@ export const PlayerActionSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('give_money'), toCharacterName: z.string(), amountEur: z.number(), description: z.string().max(200) }),
   z.strictObject({ action: z.literal('found_company'), name: z.string().min(2).max(80), description: z.string().min(3).max(400), initialInvestmentEur: z.number() }),
   z.strictObject({ action: z.literal('invest_in_company'), companyName: z.string(), amountEur: z.number() }),
-  z.strictObject({ action: z.literal('offer_equity'), toCharacterName: z.string(), companyName: z.string(), percent: z.number(), role: z.string().min(2).max(80) }),
+  z.strictObject({
+    action: z.literal('make_offer'), toCharacterName: z.string(), kind: z.enum(['join_company', 'hire', 'purchase', 'investment']), companyName: z.string(),
+    equityPercent: z.number().nullable(), salaryMonthlyEur: z.number().nullable(), priceMonthlyEur: z.number().nullable(), amountEur: z.number().nullable(),
+    role: z.string().max(80).nullable(), description: z.string().min(3).max(300),
+  }),
+  z.strictObject({ action: z.literal('respond_to_offer'), offerId: z.string(), accept: z.boolean() }),
   z.strictObject({ action: z.literal('make_promise'), toCharacterName: z.string(), description: z.string().min(3).max(300), amountEur: z.number().nullable(), dueInDays: z.number().nullable() }),
   z.strictObject({ action: z.literal('fulfill_promise'), promiseId: z.string() }),
   z.strictObject({ action: z.literal('advance_product'), companyName: z.string(), stage: z.enum(['prototype', 'mvp', 'launched']) }),
@@ -84,21 +89,82 @@ export const UpdateRelationshipOpSchema = z.strictObject({
   summary: z.string().min(10).max(800),
 });
 
-// Decisions with deterministic consequences (executed by the economy engine).
-export const RespondToOfferOpSchema = z.strictObject({ op: z.literal('respond_to_offer'), offerId: z.string(), accept: z.boolean() });
+// Promises with deterministic consequences (executed by the economy engine).
+// NPCs do NOT decide offers here: offers are resolved by the Decision Resolution Engine (engine/decision.ts).
 export const NpcPromiseOpSchema = z.strictObject({
   op: z.literal('make_promise'), description: z.string().min(3).max(300), amountEur: z.number().nullable(), dueInDays: z.number().nullable(),
 });
 export const NpcFulfillOpSchema = z.strictObject({ op: z.literal('fulfill_promise'), promiseId: z.string() });
 
 export const ChangeOpSchema = z.discriminatedUnion('op', [
-  CreateMemoryOpSchema, UpsertKnowledgeOpSchema, UpdateRelationshipOpSchema, RespondToOfferOpSchema, NpcPromiseOpSchema, NpcFulfillOpSchema,
+  CreateMemoryOpSchema, UpsertKnowledgeOpSchema, UpdateRelationshipOpSchema, NpcPromiseOpSchema, NpcFulfillOpSchema,
 ]);
 export type ChangeOp = z.infer<typeof ChangeOpSchema>;
-export const ALLOWED_OPS = ['create_memory', 'upsert_knowledge', 'update_relationship', 'respond_to_offer', 'make_promise', 'fulfill_promise'] as const;
+export const ALLOWED_OPS = ['create_memory', 'upsert_knowledge', 'update_relationship', 'make_promise', 'fulfill_promise'] as const;
+
+// ---- Independent NPC decisions ----
+
+export const OUTCOMES = [
+  'accept', 'accept_conditionally', 'escalate_to_decision_maker', 'counter', 'request_more_information', 'delay', 'reject', 'disengage',
+] as const;
+export type Outcome = (typeof OUTCOMES)[number];
+
+/** Generic factors a decision can weigh. Which ones matter (and how much) is per character. */
+export const FACTORS = [
+  'need', 'urgency', 'trust', 'perceived_value', 'risk', 'switching_cost', 'implementation_effort', 'timing', 'offer_quality',
+  'credibility', 'relationship', 'confidence_in_player', 'price_fit', 'alternatives',
+] as const;
+export type Factor = (typeof FACTORS)[number];
+/** Computed by the engine from canonical numbers, never assessed by the model. */
+export const COMPUTED_FACTORS: Factor[] = ['price_fit', 'alternatives'];
+
+export const CONSTRAINT_KINDS = [
+  'max_monthly_spend_eur', // can personally approve at most this per month
+  'max_one_off_spend_eur', // e.g. an investor's maximum cheque
+  'min_one_off_spend_eur', // e.g. an investor's minimum cheque
+  'min_monthly_income_eur', // needs at least this income to take a job/cofounder role
+  'min_equity_percent', // wants at least this stake
+  'requires_approval', // cannot say a final yes alone (partner, manager, parents, committee)
+] as const;
+// Temporary circumstances (exams, a family issue, busy season) are pressures with an expiry, not constraints.
+
+const decisionStateFields = {
+  role: z.string().min(2).max(120), // their position in this decision: "café owner evaluating software", "student offered a cofounder role"
+  goals: z.array(z.string().min(2).max(200)).min(1).max(5),
+  alternatives: z.array(z.strictObject({ text: z.string().min(2).max(200), strength: z.number().min(0).max(1) })).max(4),
+  hardConstraints: z.array(z.strictObject({ kind: z.enum(CONSTRAINT_KINDS), value: z.number().nullable(), note: z.string().max(200) })).max(5),
+  criteria: z.array(z.strictObject({ factor: z.enum(FACTORS), weight: z.number().min(0).max(3), note: z.string().max(200) })).min(1).max(8),
+  baseWillingness: z.number().min(0).max(100),
+};
+/** Stored, canonical, hidden from the player. */
+export const DecisionStateSchema = z.object({
+  ...decisionStateFields,
+  pressures: z.array(z.strictObject({ text: z.string().min(2).max(200), expiresGameTime: z.string().nullable() })).max(4),
+});
+export type DecisionState = z.infer<typeof DecisionStateSchema>;
+/** What the model proposes when a character first faces a kind of decision. */
+export const DecisionStateProposalSchema = z.object({
+  ...decisionStateFields,
+  pressures: z.array(z.strictObject({ text: z.string().min(2).max(200), expiresInDays: z.number().nullable() })).max(4),
+});
+export type DecisionStateProposal = z.infer<typeof DecisionStateProposalSchema>;
+
+/** The model assesses factors from the NPC's perspective; the engine decides. */
+export const AppraisalSchema = z.object({
+  factors: z.array(z.strictObject({ factor: z.enum(FACTORS), value: z.number().int().min(-2).max(2), reason: z.string().min(2).max(200) })).max(14),
+});
+export type Appraisal = z.infer<typeof AppraisalSchema>;
+
+export const CounterTermsSchema = z.strictObject({
+  equityPercent: z.number().nullable(), salaryMonthlyEur: z.number().nullable(), priceMonthlyEur: z.number().nullable(),
+  amountEur: z.number().nullable(), note: z.string().max(300),
+});
 
 /** Call 2 — NPC perspective. `changes` is what the schema asks the model for. */
 const npcTurnFields = {
+  expressedDecision: z.enum(OUTCOMES).nullable(), // must equal the engine-resolved outcome when there is one, else null
+  counterTerms: CounterTermsSchema.nullable(), // required when expressing a counter
+  condition: z.string().max(300).nullable(), // required when accepting conditionally
   dialogue: z.string().max(3000),
   perceivable: z.string().max(600),
   endsConversation: z.boolean(),

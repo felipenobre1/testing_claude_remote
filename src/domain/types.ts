@@ -17,6 +17,7 @@ export type EventType =
   | 'company_updated'
   | 'offer_made'
   | 'offer_resolved'
+  | 'decision'
   | 'promise_made'
   | 'promise_fulfilled'
   | 'promise_overdue'
@@ -186,16 +187,30 @@ export interface Shareholding {
   acquiredGameTime: string;
 }
 
+export type OfferKind = 'join_company' | 'hire' | 'purchase' | 'investment';
+
+export interface OfferTerms {
+  equityPercent: number | null;
+  salaryMonthlyCents: number | null;
+  priceMonthlyCents: number | null;
+  amountCents: number | null;
+  role: string | null;
+}
+
 export interface Offer {
   id: string;
   gameId: string;
-  companyId: string;
+  companyId: string | null;
   fromCharacterId: string;
   toCharacterId: string;
-  kind: 'join_company';
-  equityPercent: number;
-  role: string;
-  status: 'pending' | 'accepted' | 'rejected';
+  kind: OfferKind;
+  terms: OfferTerms;
+  description: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'countered' | 'withdrawn';
+  parentOfferId: string | null;
+  attempts: number;
+  lastOutcome: string | null;
+  nextDecisionAfter: string | null;
   createdGameTime: string;
   resolvedGameTime: string | null;
   createdAt: string;
@@ -221,11 +236,28 @@ export interface Obligation {
 export interface RecurringPayment {
   id: string;
   gameId: string;
-  accountId: string;
+  fromAccountId: string | null; // null = outside world pays (e.g. a customer)
+  toAccountId: string | null; // null = outside world receives (e.g. hosting)
   description: string;
   amountCents: number;
   nextDueGameTime: string;
   active: boolean;
+  createdAt: string;
+}
+
+export interface DecisionRecord {
+  id: string;
+  gameId: string;
+  turnId: string;
+  offerId: string;
+  characterId: string;
+  outcome: string;
+  finalScore: number;
+  roll: number;
+  seed: string;
+  reasons: string[];
+  detail: unknown;
+  gameTime: string;
   createdAt: string;
 }
 

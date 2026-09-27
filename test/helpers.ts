@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/db/store.ts';
-import type { CharacterProposal, InterpretResult } from '../src/domain/schemas.ts';
+import type { CharacterProposal, DecisionState, InterpretResult } from '../src/domain/schemas.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
 
@@ -11,10 +11,10 @@ export function tmpDbPath(): string {
 }
 
 /** A "session": fresh store + provider + engine on an existing (or new) database file. */
-export function openSession(path: string) {
+export function openSession(path: string, opts: { rng?: (seed: string) => () => number } = {}) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  const engine = new Engine(store, llm);
+  const engine = new Engine(store, llm, opts);
   return { store, llm, engine, close: () => store.close() };
 }
 
@@ -27,6 +27,7 @@ export function interp(p: Partial<InterpretResult> = {}): InterpretResult {
 
 export function npc(p: Record<string, unknown> = {}) {
   return {
+    expressedDecision: null, counterTerms: null, condition: null,
     dialogue: 'Mm, ok.', perceivable: '', endsConversation: false, eventSummary: 'They chat briefly.', importance: 1,
     mentionedCharacterNames: [], minutesElapsed: 1, changes: [], ...p,
   };
@@ -86,3 +87,25 @@ export function counts(store: Store, gameId: string) {
 
 export const lastPrompt = (llm: ScriptedProvider, task: 'interpret' | 'generate_character' | 'npc_turn') =>
   llm.callsFor(task).at(-1)!.user;
+
+/** A fixed roll: 0.5 ⇒ +0, 1 ⇒ +10, 0 ⇒ −10. */
+export const fixedRng = (x: number) => () => () => x;
+
+export function seedDecisionState(store: Store, gameId: string, characterId: string, domain: string, state: DecisionState) {
+  store.upsertDecisionState(gameId, characterId, domain, state, 'seed', new Date().toISOString());
+}
+
+/** Matteo, happy to join as cofounder: no hard limits, weak alternative, trusts Felipe. */
+export const MATTEO_KEEN: DecisionState = {
+  role: 'student offered a cofounder role by a close friend',
+  goals: ['Do something that matters alongside university'],
+  pressures: [],
+  alternatives: [{ text: 'keep studying and working weekends at the hardware shop', strength: 0.2 }],
+  hardConstraints: [],
+  criteria: [
+    { factor: 'trust', weight: 2, note: 'trusts Felipe' },
+    { factor: 'offer_quality', weight: 2, note: 'a fair stake' },
+    { factor: 'confidence_in_player', weight: 2, note: 'believes Felipe can build it' },
+  ],
+  baseWillingness: 55,
+};

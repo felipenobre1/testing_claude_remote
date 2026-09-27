@@ -3,7 +3,7 @@ import { renderNpcBriefing, retrieveNpcPerspective, type NpcContextInput } from 
 import type { Trace } from '../engine/trace.ts';
 import { findByName } from '../engine/turn.ts';
 import { formatGameTime, truncate } from '../engine/util.ts';
-import { eur, pct } from '../engine/economy.ts';
+import { describeOffer, eur, pct } from '../engine/economy.ts';
 
 // Plain-text views over canonical state and turn traces, for the CLI.
 
@@ -56,6 +56,16 @@ export function formatTurn(store: Store, gameId: string, which: string, full = f
     out.push(...v.accepted.map((a) => `  ✓ ${a.op}: ${'summary' in a ? a.summary : ''}${'topic' in a ? `${a.topic} = ${a.belief}` : ''}${a.notes.length ? `  [${a.notes.join('; ')}]` : ''}`));
     out.push(...v.rejected.map((r) => `  ✗ #${r.index} ${r.reason}\n      ${JSON.stringify(r.proposal)}`));
     if (!v.accepted.length && !v.rejected.length) out.push('  (no state changes proposed)');
+  }
+  if (t.decision) {
+    const r = t.decision.resolution;
+    out.push(h(`DECISION (engine-resolved) — offer ${t.decision.offerId}`),
+      `decision state: ${t.decision.stateSource}`,
+      `candidates: ${r.candidates.join(', ')}`,
+      ...r.blocked.map((b) => `  blocked ${b.outcome}: ${b.reason}`),
+      'factors:', ...r.factors.map((f) => `  ${f.factor.padEnd(22)} w=${f.weight} v=${f.value >= 0 ? '+' : ''}${f.value} → ${f.contribution >= 0 ? '+' : ''}${f.contribution}  [${f.source}] ${f.reason}`),
+      `base ${r.base} + factors ${r.weighted} = ${r.preRoll} · roll ${r.roll >= 0 ? '+' : ''}${r.roll} (seed ${r.seed}) → ${r.finalScore} → leans "${r.scoreOutcome}" → OUTCOME "${r.outcome}"`,
+      'reasons:', ...r.reasons.map((x) => `  ${x}`));
   }
   if (t.economy && (t.economy.actions.length || t.economy.results.length)) {
     out.push(h('MECHANICS (deterministic)'), `proposed actions: ${JSON.stringify(t.economy.actions)}`,
@@ -125,10 +135,19 @@ export function formatMoney(store: Store, gameId: string): string {
     out.push(`  ${c.name} (${c.productStage}, founded ${c.foundedGameTime}, ${c.totalShares} shares) — ${c.description}`,
       ...store.listShareholdings(c.id).map((s) => `    ${names.get(s.characterId)} ${s.shares} shares = ${pct(s.shares, c.totalShares)} (${s.role})`));
   }
-  out.push(h('OFFERS'), ...store.listOffers(gameId).map((o) => `  ${o.id} ${names.get(o.fromCharacterId)} → ${names.get(o.toCharacterId)}: ${o.equityPercent}% of ${companies.get(o.companyId)} — ${o.status}`));
+  out.push(h('OFFERS'), ...store.listOffers(gameId).map((o) => `  ${o.id} ${names.get(o.fromCharacterId)} → ${names.get(o.toCharacterId)}: ${describeOffer(o, companies.get(o.companyId ?? '') ?? '?')} — ${o.status}${o.lastOutcome ? ` (last: ${o.lastOutcome})` : ''}${o.parentOfferId ? ` counter of ${o.parentOfferId}` : ''}`));
   out.push(h('PROMISES'), ...store.listObligations(gameId).map((o) => `  ${o.id} ${names.get(o.debtorId)} → ${names.get(o.creditorId)}: ${o.description}${o.amountCents ? ` (${eur(o.amountCents)})` : ''}${o.dueGameTime ? ` due ${o.dueGameTime}` : ''} — ${o.status}`));
-  out.push(h('RECURRING'), ...store.listRecurringPayments(gameId).map((r) => `  ${owner(r.accountId)}: ${r.description} ${eur(r.amountCents)}/month, next ${r.nextDueGameTime}${r.active ? '' : ' (cancelled)'}`));
+  out.push(h('RECURRING'), ...store.listRecurringPayments(gameId).map((r) => `  ${owner(r.fromAccountId)} → ${owner(r.toAccountId)}: ${r.description} ${eur(r.amountCents)}/month, next ${r.nextDueGameTime}${r.active ? '' : ' (cancelled)'}`));
   out.push(h('LEDGER'), ...store.listTransactions(gameId).map((t) => `  [${t.gameTime}] ${eur(t.amountCents).padStart(12)}  ${owner(t.fromAccountId)} → ${owner(t.toAccountId)}  ${t.description}`));
+  return out.join('\n');
+}
+
+export function formatDecisions(store: Store, gameId: string): string {
+  const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
+  const out = [h('DECISION STATES (hidden from the player)')];
+  for (const d of store.listDecisionStates(gameId)) out.push(`  ${names.get(d.characterId)} — ${d.domain} [${d.source}]`, ...JSON.stringify(d.state, null, 2).split('\n').map((l) => `    ${l}`));
+  out.push(h('RESOLVED DECISIONS'));
+  for (const d of store.listDecisions(gameId)) out.push(`  [${d.gameTime}] ${names.get(d.characterId)} on ${d.offerId}: ${d.outcome} (score ${d.finalScore}, roll ${d.roll >= 0 ? '+' : ''}${d.roll})`, ...d.reasons.map((r) => `      ${r}`));
   return out.join('\n');
 }
 

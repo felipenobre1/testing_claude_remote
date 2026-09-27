@@ -5,8 +5,9 @@ import { MIGRATIONS } from './migrations.ts';
 import type {
   Character, Fact, Game, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene,
   TurnRow, TurnStatus, TurnResponse, WebDocument,
-  Account, Company, Obligation, Offer, RecurringPayment, Shareholding, Transaction,
+  Account, Company, DecisionRecord, Obligation, Offer, RecurringPayment, Shareholding, Transaction,
 } from '../domain/types.ts';
+import type { DecisionState } from '../domain/schemas.ts';
 
 type Row = Record<string, any>;
 type Params = Record<string, string | number | null>;
@@ -380,15 +381,19 @@ export class Store {
 
   insertOffer(o: Offer): void {
     this.run(
-      `INSERT INTO offers (id, game_id, company_id, from_character_id, to_character_id, kind, equity_percent, role, status, created_game_time, resolved_game_time, created_at, updated_at)
-       VALUES (:id, :gameId, :companyId, :fromCharacterId, :toCharacterId, :kind, :equityPercent, :role, :status, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`, { ...o });
+      `INSERT INTO offers (id, game_id, company_id, from_character_id, to_character_id, kind, terms_json, description, status, parent_offer_id,
+         attempts, last_outcome, next_decision_after, created_game_time, resolved_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :companyId, :fromCharacterId, :toCharacterId, :kind, :terms, :description, :status, :parentOfferId,
+         :attempts, :lastOutcome, :nextDecisionAfter, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`, { ...o, terms: json(o.terms) });
+  }
+  updateOffer(o: Offer): void {
+    this.run(
+      `UPDATE offers SET status = :status, attempts = :attempts, last_outcome = :lastOutcome, next_decision_after = :nextDecisionAfter,
+         resolved_game_time = :resolvedGameTime, updated_at = :updatedAt WHERE id = :id`, { ...o });
   }
   getOffer(id: string): Offer | undefined {
     const r = this.get('SELECT * FROM offers WHERE id = :id', { id });
     return r && mapOffer(r);
-  }
-  resolveOffer(id: string, status: 'accepted' | 'rejected', gameTime: string, now: string): void {
-    this.run('UPDATE offers SET status = :status, resolved_game_time = :gameTime, updated_at = :now WHERE id = :id', { id, status, gameTime, now });
   }
   listOffers(gameId: string): Offer[] {
     return this.all('SELECT * FROM offers WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapOffer);
@@ -422,8 +427,38 @@ export class Store {
 
   insertRecurringPayment(r: RecurringPayment): void {
     this.run(
-      `INSERT INTO recurring_payments (id, game_id, account_id, description, amount_cents, next_due_game_time, active, created_at)
-       VALUES (:id, :gameId, :accountId, :description, :amountCents, :nextDueGameTime, :active, :createdAt)`, { ...r, active: r.active ? 1 : 0 });
+      `INSERT INTO recurring_payments (id, game_id, from_account_id, to_account_id, description, amount_cents, next_due_game_time, active, created_at)
+       VALUES (:id, :gameId, :fromAccountId, :toAccountId, :description, :amountCents, :nextDueGameTime, :active, :createdAt)`, { ...r, active: r.active ? 1 : 0 });
+  }
+
+  // ---------- decisions ----------
+  getDecisionState(characterId: string, domain: string): DecisionState | undefined {
+    const r = this.get('SELECT state_json FROM decision_states WHERE character_id = :c AND domain = :d', { c: characterId, d: domain });
+    return r ? (JSON.parse(r.state_json) as DecisionState) : undefined;
+  }
+  upsertDecisionState(gameId: string, characterId: string, domain: string, state: DecisionState, source: 'generated' | 'seed', now: string): void {
+    this.run(
+      `INSERT INTO decision_states (game_id, character_id, domain, state_json, source, created_at, updated_at)
+       VALUES (:gameId, :c, :d, :s, :source, :now, :now)
+       ON CONFLICT (character_id, domain) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      { gameId, c: characterId, d: domain, s: json(state), source, now });
+  }
+  listDecisionStates(gameId: string): { characterId: string; domain: string; state: DecisionState; source: string }[] {
+    return this.all('SELECT * FROM decision_states WHERE game_id = :gameId ORDER BY rowid', { gameId })
+      .map((r) => ({ characterId: r.character_id, domain: r.domain, state: JSON.parse(r.state_json), source: r.source }));
+  }
+  insertDecision(d: DecisionRecord): void {
+    this.run(
+      `INSERT INTO decisions (id, game_id, turn_id, offer_id, character_id, outcome, final_score, roll, seed, reasons_json, detail_json, game_time, created_at)
+       VALUES (:id, :gameId, :turnId, :offerId, :characterId, :outcome, :finalScore, :roll, :seed, :reasons, :detail, :gameTime, :createdAt)`,
+      { ...d, reasons: json(d.reasons), detail: json(d.detail) });
+  }
+  listDecisions(gameId: string): DecisionRecord[] {
+    return this.all('SELECT * FROM decisions WHERE game_id = :gameId ORDER BY rowid', { gameId }).map((r) => ({
+      id: r.id, gameId: r.game_id, turnId: r.turn_id, offerId: r.offer_id, characterId: r.character_id, outcome: r.outcome,
+      finalScore: r.final_score, roll: r.roll, seed: r.seed, reasons: JSON.parse(r.reasons_json), detail: JSON.parse(r.detail_json),
+      gameTime: r.game_time, createdAt: r.created_at,
+    }));
   }
   listRecurringPayments(gameId: string): RecurringPayment[] {
     return this.all('SELECT * FROM recurring_payments WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapRecurring);
@@ -566,8 +601,9 @@ function mapShareholding(r: Row): Shareholding {
 function mapOffer(r: Row): Offer {
   return {
     id: r.id, gameId: r.game_id, companyId: r.company_id, fromCharacterId: r.from_character_id, toCharacterId: r.to_character_id, kind: r.kind,
-    equityPercent: r.equity_percent, role: r.role, status: r.status, createdGameTime: r.created_game_time, resolvedGameTime: r.resolved_game_time,
-    createdAt: r.created_at, updatedAt: r.updated_at,
+    terms: parse(r.terms_json), description: r.description, status: r.status, parentOfferId: r.parent_offer_id, attempts: r.attempts,
+    lastOutcome: r.last_outcome, nextDecisionAfter: r.next_decision_after, createdGameTime: r.created_game_time,
+    resolvedGameTime: r.resolved_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 function mapObligation(r: Row): Obligation {
@@ -579,7 +615,7 @@ function mapObligation(r: Row): Obligation {
 }
 function mapRecurring(r: Row): RecurringPayment {
   return {
-    id: r.id, gameId: r.game_id, accountId: r.account_id, description: r.description, amountCents: r.amount_cents,
+    id: r.id, gameId: r.game_id, fromAccountId: r.from_account_id, toAccountId: r.to_account_id, description: r.description, amountCents: r.amount_cents,
     nextDueGameTime: r.next_due_game_time, active: r.active === 1, createdAt: r.created_at,
   };
 }

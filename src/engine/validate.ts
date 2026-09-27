@@ -1,9 +1,12 @@
 import type { z } from 'zod';
 import {
-  ALLOWED_OPS, CreateMemoryOpSchema, NpcFulfillOpSchema, NpcPromiseOpSchema, RespondToOfferOpSchema, UpdateRelationshipOpSchema, UpsertKnowledgeOpSchema,
+  ALLOWED_OPS, CreateMemoryOpSchema, NpcFulfillOpSchema, NpcPromiseOpSchema, UpdateRelationshipOpSchema, UpsertKnowledgeOpSchema,
+  type DecisionState, type NpcTurnEnvelope,
   type CharacterProposal,
 } from '../domain/schemas.ts';
-import type { Character, Obligation, Offer } from '../domain/types.ts';
+import type { Character, Obligation, Offer, OfferTerms } from '../domain/types.ts';
+import { applyHardConstraints, type Resolution } from './decision.ts';
+import { checkTerms } from './economy.ts';
 
 // The model proposes; this module decides. Anything not explicitly allowed is rejected.
 
@@ -11,7 +14,6 @@ export type AcceptedChange =
   | { op: 'create_memory'; ownerId: string; summary: string; importance: number; emotionalWeight: number; subjectIds: string[]; notes: string[] }
   | { op: 'upsert_knowledge'; ownerId: string; topic: string; belief: string; confidence: number; sourceKind: 'told' | 'observed' | 'inferred'; aboutCharacterId: string | null; notes: string[] }
   | { op: 'update_relationship'; fromId: string; toId: string; summary: string; notes: string[] }
-  | { op: 'respond_to_offer'; ownerId: string; offerId: string; accept: boolean; notes: string[] }
   | { op: 'make_promise'; ownerId: string; toId: string; description: string; dueInDays: number | null; notes: string[] }
   | { op: 'fulfill_promise'; ownerId: string; promiseId: string; notes: string[] };
 
@@ -26,7 +28,6 @@ export interface ValidationContext {
   observerIds: string[]; // who perceived the exchange these changes come from
   findCharacter: (name: string) => Character | undefined;
   partnerId?: string; // who the NPC is talking to (creditor of NPC promises)
-  offer?: (id: string) => Offer | undefined;
   obligation?: (id: string) => Obligation | undefined;
 }
 
@@ -39,6 +40,8 @@ const FORBIDDEN_OPS: Record<string, string> = {
   update_character: 'Character identity is immutable after creation',
   update_personality: 'Character identity is immutable after creation',
   create_character: 'Characters are only created by the backend when a new person is referenced',
+  respond_to_offer: 'Offers are resolved by the decision engine; express the resolved outcome in expressedDecision instead',
+  accept_offer: 'Offers are resolved by the decision engine; express the resolved outcome in expressedDecision instead',
 };
 
 const zodReason = (e: z.ZodError) => e.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
@@ -87,15 +90,6 @@ export function validateChanges(raw: unknown[], ctx: ValidationContext): { accep
         else notes.push(`unknown subject "${r.data.aboutCharacterName}" not linked`);
       }
       accepted.push({ op: 'upsert_knowledge', ownerId, topic: r.data.topic, belief: r.data.belief, confidence: r.data.confidence, sourceKind: r.data.sourceKind, aboutCharacterId, notes });
-    } else if (op === 'respond_to_offer') {
-      const r = RespondToOfferOpSchema.safeParse(proposal);
-      if (!r.success) return reject(`invalid respond_to_offer: ${zodReason(r.error)}`);
-      const offer = ctx.offer?.(r.data.offerId);
-      if (!offer || offer.toCharacterId !== ownerId) return reject(`no offer ${r.data.offerId} was made to ${ctx.npc.name}`);
-      if (offer.status !== 'pending') return reject(`offer ${r.data.offerId} is already ${offer.status}`);
-      if (seen.has(`offer:${offer.id}`)) return reject('duplicate answer to the same offer');
-      seen.add(`offer:${offer.id}`);
-      accepted.push({ op: 'respond_to_offer', ownerId, offerId: offer.id, accept: r.data.accept, notes: [] });
     } else if (op === 'make_promise') {
       const r = NpcPromiseOpSchema.safeParse(proposal);
       if (!r.success) return reject(`invalid make_promise: ${zodReason(r.error)}`);
@@ -142,4 +136,56 @@ export function validateCharacterProposal(p: CharacterProposal, requestedName: s
     reasons.push(`a character named "${p.name}" already exists`);
   }
   return reasons;
+}
+
+/**
+ * The portrayal must express exactly the engine-resolved outcome (or none when there was no decision).
+ * A counter must be something this character could actually accept under their own hard constraints.
+ * Returns problems plus the counter terms (in cents) to execute.
+ */
+export function validatePortrayal(
+  out: NpcTurnEnvelope, decision: { offer: Offer; state: DecisionState; resolution: Resolution } | null,
+): { problems: string[]; counter: OfferTerms | null } {
+  if (!decision) {
+    const problems = [];
+    if (out.expressedDecision !== null) problems.push('expressedDecision must be null: there is no decision to make this turn');
+    if (out.counterTerms !== null) problems.push('counterTerms must be null: there is no decision to make this turn');
+    return { problems, counter: null };
+  }
+  const { offer, state, resolution } = decision;
+  const problems: string[] = [];
+  if (out.expressedDecision !== resolution.outcome) {
+    problems.push(`expressedDecision must be "${resolution.outcome}" (the decision is already settled; express it, don't change it)`);
+  }
+  if (resolution.outcome === 'accept_conditionally' && !out.condition) problems.push('accept_conditionally needs the condition you are setting');
+  if (resolution.outcome !== 'counter') return { problems, counter: null };
+  if (!out.counterTerms) return { problems: [...problems, 'a counter needs counterTerms'], counter: null };
+  const c = out.counterTerms;
+  const cents = (x: number | null, fallback: number | null) => (x === null ? fallback : Math.round(x * 100));
+  const counter: OfferTerms = {
+    equityPercent: c.equityPercent ?? offer.terms.equityPercent,
+    salaryMonthlyCents: cents(c.salaryMonthlyEur, offer.terms.salaryMonthlyCents),
+    priceMonthlyCents: cents(c.priceMonthlyEur, offer.terms.priceMonthlyCents),
+    amountCents: cents(c.amountEur, offer.terms.amountCents),
+    role: offer.terms.role,
+  };
+  const bad = checkTerms(offer.kind, counter);
+  if (bad) problems.push(`counterTerms: ${bad}`);
+  if (JSON.stringify(counter) === JSON.stringify(offer.terms)) problems.push('counterTerms must change something about the offer');
+  // A counter must satisfy the character's own numeric constraints (approval may still be needed).
+  const numeric = { ...state, hardConstraints: state.hardConstraints.filter((h) => h.kind !== 'requires_approval') };
+  const still = applyHardConstraints(numeric, { ...offer, terms: counter });
+  if (still.blocked.length) problems.push(`counterTerms break your own limits: ${still.notes.join('; ')}`);
+  return { problems, counter: problems.length ? null : counter };
+}
+
+/** Sanity checks on a model-proposed decision state beyond the schema. */
+export function decisionStateProblems(p: { criteria: { factor: string }[]; hardConstraints: { kind: string; value: number | null }[] }): string[] {
+  const problems: string[] = [];
+  const f = p.criteria.map((c) => c.factor);
+  if (new Set(f).size !== f.length) problems.push('each factor may appear only once in criteria');
+  const k = p.hardConstraints.map((c) => c.kind);
+  if (new Set(k).size !== k.length) problems.push('each constraint kind may appear only once');
+  for (const c of p.hardConstraints) if (c.kind !== 'requires_approval' && (c.value === null || c.value < 0)) problems.push(`${c.kind} needs a non-negative value`);
+  return problems;
 }
