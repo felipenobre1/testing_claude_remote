@@ -110,7 +110,7 @@ const store = s2.store;
 const matteoAgain = store.listCharacters(gameId).filter((c) => /^matteo/i.test(c.name));
 check(structural, 'Session 2 loaded the same single Matteo (no regeneration)', matteoAgain.length === 1 && matteoAgain[0]!.id === matteo?.id);
 check(structural, 'Matteo identity unchanged across sessions', matteo ? JSON.stringify(store.getCharacter(matteo.id)) === matteoRow : false);
-check(structural, 'Canonical cash still €2,500', store.getFact(gameId, player.id, 'cash_eur')?.value === '2500');
+check(structural, 'Canonical cash still €2,500', store.getAccountOf(gameId, 'character', player.id)?.balanceCents === 250_000);
 
 const allCalls = [...s1.llm.calls, ...s2.llm.calls];
 const npcPromptsFor = (name: string) => allCalls.filter((c) => c.req.task === 'npc_turn' && c.req.system.includes(`You are ${name}`));
@@ -139,9 +139,37 @@ if (sofia) {
   const sofiaTurn = s2.turns.at(-1);
   check(behavioural, "Sofia's reply does not reveal the amount", !MONEY.test(sofiaTurn?.text.split('\n').filter((l) => l.startsWith(sofia.name)).join(' ') ?? ''), sofiaTurn?.text);
 }
-const failed = [...s1.turns, ...s2.turns].filter((t) => t.status !== 'committed');
-check(structural, 'Every turn committed', failed.length === 0, failed.map((t) => `#${t.seq}: ${t.error}`).join(' | '));
 store.close();
+
+// ---------------- session 3: Milestone 2 — company, equity, money, promises, time ----------------
+const s3 = await session('Session 3 (Milestone 2: the company)', [
+  'I buy the domain gradeeconomy.com for €12.',
+  "I found Grade Economy and put €500 of my savings into it.",
+  'I call Matteo and tell him: I just founded Grade Economy. I want you as cofounder — I offer you 40% of the company.',
+  "I promise Matteo I'll have a working prototype to show him within 7 days.",
+  'I hang up and spend the next week building the prototype.',
+], gameId);
+const st = s3.store;
+const companies = st.listCompanies(gameId);
+check(structural, 'Company exists after founding', companies.length === 1, companies.map((c) => c.name).join(', '));
+for (const c of companies) {
+  const sum = st.listShareholdings(c.id).reduce((n, h) => n + h.shares, 0);
+  check(structural, `${c.name}: shareholdings add up to total shares`, sum === c.totalShares, `${sum} / ${c.totalShares}`);
+}
+const accounts = st.listAccounts(gameId);
+check(structural, 'No account is negative', accounts.every((a) => a.balanceCents >= 0));
+const txs = st.listTransactions(gameId);
+const outflow = txs.filter((x) => !x.toAccountId).reduce((n, x) => n + x.amountCents, 0);
+const inflow = txs.filter((x) => !x.fromAccountId).reduce((n, x) => n + x.amountCents, 0);
+check(structural, 'Ledger balances (accounts = €2,500 − spent + received)', accounts.reduce((n, a) => n + a.balanceCents, 0) === 250_000 - outflow + inflow);
+const offers = st.listOffers(gameId);
+check(behavioural, 'Interpreter turned the offer into an offer_equity action', offers.length > 0, offers.map((o) => `${o.equityPercent}% ${o.status}`).join(', '));
+check(behavioural, 'Matteo made a decision on the offer (or is still considering)', offers.some((o) => o.status !== 'pending'), offers.map((o) => o.status).join(', '));
+check(behavioural, 'The promise was recorded as an obligation', st.listObligations(gameId).length > 0);
+check(behavioural, 'A week of work moved the clock by days', (st.getGame(gameId)!.gameTime.slice(0, 10)) > '2026-09-28', st.getGame(gameId)!.gameTime);
+const failed = [...s1.turns, ...s2.turns, ...s3.turns].filter((t) => t.status !== 'committed' && t.status !== 'clarification');
+check(structural, 'Every turn committed', failed.length === 0, failed.map((t) => `#${t.seq}: ${t.error}`).join(' | '));
+st.close();
 
 // ---------------- report ----------------
 const fmt = (xs: typeof structural) => xs.map((c) => `- ${c.ok ? '✅' : '❌'} ${c.name}${c.detail ? `\n  - ${c.detail.replace(/\n/g, ' ')}` : ''}`).join('\n');

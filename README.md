@@ -143,6 +143,26 @@ If you share a link in a conversation ("check www.gradeeconomy.com"), the backen
 - **Not fetched:** links inside private thoughts are never opened.
 - **Turning it off:** set `STARTUP_FETCH=off` to disable fetching.
 
+### Milestone 2: money, company, equity, promises, time
+
+The code decides everything that has an objective answer; the model only proposes.
+
+- **Player actions:** the interpreter can propose `pay`, `give_money`, `found_company`, `invest_in_company`, `offer_equity`, `make_promise`, `fulfill_promise` and `advance_product`. The economy planner checks each one against a simulated copy of real balances and ownership.
+  - Impossible actions ("buy a car for €30,000") are **game outcomes**, reported to the player as `✗ …`. They are not model errors.
+  - Unknown people or ids count as model errors, and those actions are skipped.
+- **Decisions only people can make:** accepting an equity offer or promising help. The NPC decides (`respond_to_offer`, `make_promise`, `fulfill_promise`); the engine executes the result.
+  - On acceptance, new shares are issued so the newcomer owns exactly the offered percentage, and everyone else is diluted. For example, 1,000,000 founder shares plus 40% gives 666,667 new shares, a 60/40 split.
+- **Money:** integer cents in `accounts`, moved only through `transactions` (the ledger). The outside world is `NULL`.
+- **Time is a resource:** actions take realistic time, up to a week per turn. Anything longer than an hour ends an open call.
+  - When the clock passes a date, recurring costs are charged, or the service is cancelled if the money isn't there.
+  - Promises past their due date become **overdue** events that both parties observe, so the other person knows.
+- **Who sees what:**
+  - An NPC sees only companies they own part of, and offers and promises they are a party to.
+  - The player sees their own cash, companies and promises.
+- **Status line:** after every turn the CLI prints a line built only from canonical state, e.g. `── Sun 27 Sep, 09:15 · Home — bedroom · €2,000.00 · Grade Economy 60.0% · €500.00 · idea · texting Matteo ──`.
+- **Inspect:** `npm start -- inspect money` shows accounts, cap tables, offers, promises, recurring costs and the full ledger.
+- **Old saves:** saves from Milestone 1 are migrated automatically. The `cash_eur` Fact becomes a real account.
+
 ## SQLite schema
 
 | Table | Purpose |
@@ -159,6 +179,11 @@ If you share a link in a conversation ("check www.gradeeconomy.com"), the backen
 | `scenes` | current location, description, physically present characters, open interaction |
 | `interactions` | live-conversation bookkeeping (channel, participants, start/end). History stays in events. |
 | `documents` + `event_documents` | snapshots of real web pages shared in play; reachable only through an observed event |
+| `accounts` / `transactions` | money in integer cents; every change is a ledger entry |
+| `companies` / `shareholdings` | company state (stage, total shares) and the cap table |
+| `offers` | equity offers awaiting the other person's decision |
+| `obligations` | promises and debts between characters (due date, status, overdue notification) |
+| `recurring_payments` | monthly costs, charged as game time passes |
 | `turns` | request id (unique once final), status, base/committed revision, stored response, full trace |
 
 ## Known limitations (Milestone 1)

@@ -11,7 +11,16 @@ export type EventType =
   | 'conversation_ended'
   | 'action'
   | 'private_thought'
-  | 'link_shared';
+  | 'link_shared'
+  | 'money'
+  | 'company_founded'
+  | 'company_updated'
+  | 'offer_made'
+  | 'offer_resolved'
+  | 'promise_made'
+  | 'promise_fulfilled'
+  | 'promise_overdue'
+  | 'time_passed';
 
 export interface Game {
   id: string;
@@ -129,6 +138,97 @@ export interface Knowledge {
   updatedAt: string;
 }
 
+// ---- Milestone 2: economy ----
+
+export type ProductStage = 'idea' | 'prototype' | 'mvp' | 'launched';
+export const PRODUCT_STAGES: ProductStage[] = ['idea', 'prototype', 'mvp', 'launched'];
+
+export interface Account {
+  id: string;
+  gameId: string;
+  ownerKind: 'character' | 'company';
+  ownerId: string;
+  balanceCents: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Transaction {
+  id: string;
+  gameId: string;
+  turnId: string | null;
+  fromAccountId: string | null; // null = outside world
+  toAccountId: string | null;
+  amountCents: number;
+  description: string;
+  category: string;
+  gameTime: string;
+  createdAt: string;
+}
+
+export interface Company {
+  id: string;
+  gameId: string;
+  name: string;
+  description: string;
+  productStage: ProductStage;
+  totalShares: number;
+  foundedGameTime: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Shareholding {
+  companyId: string;
+  characterId: string;
+  shares: number;
+  role: string;
+  acquiredGameTime: string;
+}
+
+export interface Offer {
+  id: string;
+  gameId: string;
+  companyId: string;
+  fromCharacterId: string;
+  toCharacterId: string;
+  kind: 'join_company';
+  equityPercent: number;
+  role: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdGameTime: string;
+  resolvedGameTime: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Obligation {
+  id: string;
+  gameId: string;
+  debtorId: string;
+  creditorId: string;
+  description: string;
+  amountCents: number | null;
+  dueGameTime: string | null;
+  status: 'open' | 'fulfilled' | 'cancelled';
+  overdueNotified: boolean;
+  createdGameTime: string;
+  resolvedGameTime: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecurringPayment {
+  id: string;
+  gameId: string;
+  accountId: string;
+  description: string;
+  amountCents: number;
+  nextDueGameTime: string;
+  active: boolean;
+  createdAt: string;
+}
+
 /** Snapshot of a real web page as it was when a character opened it. */
 export interface WebDocument {
   id: string;
@@ -166,6 +266,7 @@ export interface TurnResponse {
   conversationEnded: boolean;
   clarificationQuestion: string | null;
   error: string | null;
+  results: string[]; // deterministic outcomes: payments, company changes, offers, promises, time effects
   text: string; // fully composed player-facing text
   replayed?: boolean;
 }

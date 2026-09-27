@@ -3,6 +3,7 @@ import { renderNpcBriefing, retrieveNpcPerspective, type NpcContextInput } from 
 import type { Trace } from '../engine/trace.ts';
 import { findByName } from '../engine/turn.ts';
 import { formatGameTime, truncate } from '../engine/util.ts';
+import { eur, pct } from '../engine/economy.ts';
 
 // Plain-text views over canonical state and turn traces, for the CLI.
 
@@ -56,6 +57,10 @@ export function formatTurn(store: Store, gameId: string, which: string, full = f
     out.push(...v.rejected.map((r) => `  ✗ #${r.index} ${r.reason}\n      ${JSON.stringify(r.proposal)}`));
     if (!v.accepted.length && !v.rejected.length) out.push('  (no state changes proposed)');
   }
+  if (t.economy && (t.economy.actions.length || t.economy.results.length)) {
+    out.push(h('MECHANICS (deterministic)'), `proposed actions: ${JSON.stringify(t.economy.actions)}`,
+      ...t.economy.results.map((r) => `  ${r}`), ...t.economy.actionErrors.map((e) => `  model error: ${e}`));
+  }
   if (t.writes) out.push(h('DATABASE WRITES'), ...t.writes.map((w) => `  ${w.op.padEnd(6)} ${w.table.padEnd(14)} ${w.id}${w.note ? `  (${w.note})` : ''}`));
   if (t.error) out.push(h('ERROR'), t.error);
   if (t.response) out.push(h('COMMITTED RESPONSE'), t.response.text);
@@ -106,9 +111,53 @@ export function formatEvents(store: Store, gameId: string): string {
   ).join('\n') || '(no events)';
 }
 
+export function formatMoney(store: Store, gameId: string): string {
+  const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
+  const companies = new Map(store.listCompanies(gameId).map((c) => [c.id, c.name]));
+  const owner = (acctId: string | null) => {
+    if (!acctId) return 'outside world';
+    const a = store.getAccount(acctId)!;
+    return a.ownerKind === 'company' ? companies.get(a.ownerId)! : names.get(a.ownerId)!;
+  };
+  const out = [h('ACCOUNTS'), ...store.listAccounts(gameId).map((a) => `  ${owner(a.id).padEnd(24)} ${eur(a.balanceCents)}`)];
+  out.push(h('COMPANIES'));
+  for (const c of store.listCompanies(gameId)) {
+    out.push(`  ${c.name} (${c.productStage}, founded ${c.foundedGameTime}, ${c.totalShares} shares) — ${c.description}`,
+      ...store.listShareholdings(c.id).map((s) => `    ${names.get(s.characterId)} ${s.shares} shares = ${pct(s.shares, c.totalShares)} (${s.role})`));
+  }
+  out.push(h('OFFERS'), ...store.listOffers(gameId).map((o) => `  ${o.id} ${names.get(o.fromCharacterId)} → ${names.get(o.toCharacterId)}: ${o.equityPercent}% of ${companies.get(o.companyId)} — ${o.status}`));
+  out.push(h('PROMISES'), ...store.listObligations(gameId).map((o) => `  ${o.id} ${names.get(o.debtorId)} → ${names.get(o.creditorId)}: ${o.description}${o.amountCents ? ` (${eur(o.amountCents)})` : ''}${o.dueGameTime ? ` due ${o.dueGameTime}` : ''} — ${o.status}`));
+  out.push(h('RECURRING'), ...store.listRecurringPayments(gameId).map((r) => `  ${owner(r.accountId)}: ${r.description} ${eur(r.amountCents)}/month, next ${r.nextDueGameTime}${r.active ? '' : ' (cancelled)'}`));
+  out.push(h('LEDGER'), ...store.listTransactions(gameId).map((t) => `  [${t.gameTime}] ${eur(t.amountCents).padStart(12)}  ${owner(t.fromAccountId)} → ${owner(t.toAccountId)}  ${t.description}`));
+  return out.join('\n');
+}
+
 export function formatFacts(store: Store, gameId: string): string {
   const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
   return store.listFacts(gameId).map((f) => `${names.get(f.subject) ?? f.subject}.${f.predicate} = ${f.value}`).join('\n');
+}
+
+/** One-line game HUD, built only from canonical state: time · place · cash · companies · promises · conversation. */
+export function formatStatusLine(store: Store, gameId: string): string {
+  const game = store.getGame(gameId)!;
+  const me = game.playerCharacterId;
+  const scene = store.getScene(gameId);
+  const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name.split(' ')[0]]));
+  const parts = [
+    formatGameTime(game.gameTime).replace(/^(\w{3})\w*,? (\d+) (\w{3})\w* \d{4}/, '$1 $2 $3'),
+    scene.location.replace(/, Milan$/, ''),
+    eur(store.getAccountOf(gameId, 'character', me)?.balanceCents ?? 0),
+  ];
+  for (const c of store.listCompaniesOf(me)) {
+    const mine = store.listShareholdings(c.id).find((h) => h.characterId === me)!;
+    parts.push(`${c.name} ${pct(mine.shares, c.totalShares)} · ${eur(store.getAccountOf(gameId, 'company', c.id)?.balanceCents ?? 0)} · ${c.productStage}`);
+  }
+  const open = store.listObligationsInvolving(me).filter((o) => o.status === 'open');
+  const overdue = open.filter((o) => o.dueGameTime && o.dueGameTime <= game.gameTime).length;
+  if (open.length) parts.push(`${open.length} promise${open.length > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`);
+  const talk = scene.interactionId ? store.getInteraction(scene.interactionId) : undefined;
+  if (talk) parts.push(`${talk.channel === 'message' ? 'texting' : talk.channel === 'phone' ? 'on the phone with' : 'with'} ${talk.participantIds.filter((id) => id !== me).map((id) => names.get(id)).join(', ')}`);
+  return `── ${parts.join(' · ')} ──`;
 }
 
 export function formatStatus(store: Store, gameId: string): string {

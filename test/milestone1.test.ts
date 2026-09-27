@@ -30,7 +30,7 @@ test('Milestone 1: persistent Matteo across sessions with knowledge boundaries',
     assert.equal(game.timezone, 'Europe/Rome');
     assert.match(opening, /Sunday, 27 September 2026, 09:14/);
     assert.equal(s1.store.listCharacters(gameId).length, 1);
-    assert.equal(s1.store.getFact(gameId, playerId, 'cash_eur')!.value, '2500');
+    assert.equal(s1.store.getAccountOf(gameId, 'character', playerId)!.balanceCents, 250_000);
   });
 
   await t.test('"I grab a Coke, go onto the balcony and call my friend Matteo" creates Matteo', async () => {
@@ -127,7 +127,7 @@ test('Milestone 1: persistent Matteo across sessions with knowledge boundaries',
     // The npc prompt showed Matteo his existing belief under the same topic, so he could update it.
     assert.match(lastPrompt(s1.llm, 'npc_turn'), /felipe\.savings: Felipe told me they have €2,500/);
 
-    assert.equal(s1.store.getFact(gameId, playerId, 'cash_eur')!.value, '2500', 'canonical cash unchanged');
+    assert.equal(s1.store.getAccountOf(gameId, 'character', playerId)!.balanceCents, 250_000, 'canonical cash unchanged');
     const beliefs = s1.store.listKnowledgeOf(matteoId);
     assert.equal(beliefs.length, 1, 'same topic updated, not duplicated');
     assert.match(beliefs[0]!.belief, /€10,000/);

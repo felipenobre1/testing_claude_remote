@@ -22,11 +22,26 @@ export const InterpretResultSchema = z.object({
   newLocation: z.string().min(2).max(160).nullable(),
   newSceneDescription: z.string().max(400).nullable(), // what the new location looks like; required when newLocation is set
   safety: z.enum(['none', 'self_harm', 'serious_violence']),
-  minutesElapsed: z.number().int().min(0).max(120),
+  actions: z.array(z.lazy(() => PlayerActionSchema)).max(6), // deterministic mechanics the player performs this turn
+  minutesElapsed: z.number().int().min(0).max(10080), // up to a week of focused work / waiting
   narration: z.string().max(1500),
   clarificationQuestion: z.string().max(400).nullable(),
 });
 export type InterpretResult = z.infer<typeof InterpretResultSchema>;
+
+// ---- Player actions with deterministic mechanics (money, company, equity, promises). ----
+// Every field is required (nullable where optional) so the schema works in strict structured output.
+export const PlayerActionSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('pay'), amountEur: z.number(), description: z.string().min(2).max(200), fromCompanyName: z.string().nullable(), recurringMonthly: z.boolean() }),
+  z.strictObject({ action: z.literal('give_money'), toCharacterName: z.string(), amountEur: z.number(), description: z.string().max(200) }),
+  z.strictObject({ action: z.literal('found_company'), name: z.string().min(2).max(80), description: z.string().min(3).max(400), initialInvestmentEur: z.number() }),
+  z.strictObject({ action: z.literal('invest_in_company'), companyName: z.string(), amountEur: z.number() }),
+  z.strictObject({ action: z.literal('offer_equity'), toCharacterName: z.string(), companyName: z.string(), percent: z.number(), role: z.string().min(2).max(80) }),
+  z.strictObject({ action: z.literal('make_promise'), toCharacterName: z.string(), description: z.string().min(3).max(300), amountEur: z.number().nullable(), dueInDays: z.number().nullable() }),
+  z.strictObject({ action: z.literal('fulfill_promise'), promiseId: z.string() }),
+  z.strictObject({ action: z.literal('advance_product'), companyName: z.string(), stage: z.enum(['prototype', 'mvp', 'launched']) }),
+]);
+export type PlayerAction = z.infer<typeof PlayerActionSchema>;
 
 /** Character generation — only when a referenced person does not exist yet. */
 export const CharacterProposalSchema = z.object({
@@ -69,9 +84,18 @@ export const UpdateRelationshipOpSchema = z.strictObject({
   summary: z.string().min(10).max(800),
 });
 
-export const ChangeOpSchema = z.discriminatedUnion('op', [CreateMemoryOpSchema, UpsertKnowledgeOpSchema, UpdateRelationshipOpSchema]);
+// Decisions with deterministic consequences (executed by the economy engine).
+export const RespondToOfferOpSchema = z.strictObject({ op: z.literal('respond_to_offer'), offerId: z.string(), accept: z.boolean() });
+export const NpcPromiseOpSchema = z.strictObject({
+  op: z.literal('make_promise'), description: z.string().min(3).max(300), amountEur: z.number().nullable(), dueInDays: z.number().nullable(),
+});
+export const NpcFulfillOpSchema = z.strictObject({ op: z.literal('fulfill_promise'), promiseId: z.string() });
+
+export const ChangeOpSchema = z.discriminatedUnion('op', [
+  CreateMemoryOpSchema, UpsertKnowledgeOpSchema, UpdateRelationshipOpSchema, RespondToOfferOpSchema, NpcPromiseOpSchema, NpcFulfillOpSchema,
+]);
 export type ChangeOp = z.infer<typeof ChangeOpSchema>;
-export const ALLOWED_OPS = ['create_memory', 'upsert_knowledge', 'update_relationship'] as const;
+export const ALLOWED_OPS = ['create_memory', 'upsert_knowledge', 'update_relationship', 'respond_to_offer', 'make_promise', 'fulfill_promise'] as const;
 
 /** Call 2 — NPC perspective. `changes` is what the schema asks the model for. */
 const npcTurnFields = {

@@ -21,7 +21,7 @@ export function openSession(path: string) {
 export function interp(p: Partial<InterpretResult> = {}): InterpretResult {
   return {
     intents: ['speak'], target: null, channel: null, spokenText: null, visibleAction: null, privateThought: null,
-    newLocation: null, newSceneDescription: null, safety: 'none', minutesElapsed: 0, narration: '', clarificationQuestion: null, ...p,
+    newLocation: null, newSceneDescription: null, safety: 'none', actions: [], minutesElapsed: 0, narration: '', clarificationQuestion: null, ...p,
   };
 }
 

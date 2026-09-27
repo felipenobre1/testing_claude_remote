@@ -30,7 +30,7 @@ test('invalid proposals (cash change, identity rewrite) are rejected and nothing
   assert.deepEqual(counts(store, game.id), before, 'no partial writes');
   assert.equal(store.getGame(game.id)!.revision, gameBefore.revision);
   assert.equal(store.getGame(game.id)!.gameTime, gameBefore.gameTime);
-  assert.equal(store.getFact(game.id, player.id, 'cash_eur')!.value, '2500');
+  assert.equal(store.getAccountOf(game.id, 'character', player.id)!.balanceCents, 250_000);
   assert.equal(store.getCharacter(matteo.id)!.personality, MATTEO.personality);
 
   const failed = store.lastTurn(game.id)!;

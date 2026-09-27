@@ -18,6 +18,7 @@ import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 import { validateChanges, validateCharacterProposal, type AcceptedChange, type Rejection } from './validate.ts';
 import { extractUrls, type PageFetcher } from './web.ts';
+import { applyOps, EconomyPlanner, npcEconomyBriefing, playerEconomyBriefing, type PlanContext } from './economy.ts';
 
 export interface TurnRequest {
   gameId: string;
@@ -111,17 +112,25 @@ export class Engine {
     const player = pp.player;
     trace.scene = pp.scene;
     trace.openInteraction = pp.interaction;
+    const everyone = store.listCharacters(game.id);
+    const nameOf = (id: string) => everyone.find((c) => c.id === id)?.name ?? id;
+    // The economy planner simulates money/company/promise changes on a copy of canonical state.
+    const econCtx: PlanContext = {
+      store, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
+      player, characters: everyone, interaction: null,
+    };
+    const economy = new EconomyPlanner(econCtx);
 
     // 1. Interpret raw input from the player's perspective.
     const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name),
-      renderPlayerBriefing(pp, input), 'interpretation', InterpretResultSchema, InterpretResultSchema);
+      renderPlayerBriefing(pp, input, playerEconomyBriefing(economy, player.id, game.gameTime, nameOf)),
+      'interpretation', InterpretResultSchema, InterpretResultSchema);
     trace.interpretation = interp;
     // Self-harm is never simulated: step out of the fiction, change nothing.
     if (interp.safety === 'self_harm') return this.clarify(trace, game, SELF_HARM_MESSAGE);
     if (interp.clarificationQuestion) return this.clarify(trace, game, interp.clarificationQuestion);
 
     // 2. Resolve who the player is addressing; generate them if they don't exist yet.
-    const everyone = store.listCharacters(game.id);
     const npcs = everyone.filter((c) => !c.isPlayer);
     const open = pp.interaction && !pp.interaction.endedGameTime ? pp.interaction : null;
     let target: Character | undefined;
@@ -191,7 +200,27 @@ export class Engine {
       if (interaction.channel === 'in_person') scene.activeCharacterIds.push(target.id);
       startedNew = true;
     }
+    // Hours of work or waiting don't happen mid-call: a long activity ends the open conversation.
+    if (interaction && !startedNew && interp.minutesElapsed > 60) {
+      endInteraction(interaction, t0, player.name);
+      interaction = null;
+    }
     const inPersonHere = scene.activeCharacterIds.filter((id) => id !== player.id);
+
+    // Player mechanics (money, company, equity, promises) — deterministic, checked against real balances.
+    if (pending) econCtx.characters = [...everyone, pending.character];
+    econCtx.interaction = interaction;
+    econCtx.gameTime = t1;
+    econCtx.location = location;
+    const actionErrors: string[] = [];
+    for (const a of interp.actions) {
+      const err = economy.playerAction(a);
+      if (err) {
+        actionErrors.push(err);
+        economy.results.push(`✗ Couldn't do that (${err}).`);
+      }
+    }
+    const playerResultCount = economy.results.length;
 
     // 4. Player-side events. Private thoughts are observed by the player alone.
     if (interp.privateThought) {
@@ -251,11 +280,16 @@ export class Engine {
         npcId: target.id, partner: player, channel: interaction.channel, interactionId: startedNew ? null : interaction.id,
         pendingLines, gameTime: t1, sceneLocation: location, pending, pendingDocuments,
       };
+      const econView = npcEconomyBriefing(economy, target.id, t1, (id) => (id === target!.id ? target!.name : nameOf(id)));
+      ctxInput.economy = econView.text;
       const perspective = retrieveNpcPerspective(store, ctxInput);
-      trace.retrieval = perspectiveTrace(perspective);
+      trace.retrieval = { ...perspectiveTrace(perspective), economyIds: econView.ids };
 
       const known = pending ? [...everyone, pending.character] : everyone;
-      const vctx = { npc: target, observerIds: interaction.participantIds, findCharacter: (n: string) => findByName(known, n)[0] };
+      const vctx = {
+        npc: target, observerIds: interaction.participantIds, findCharacter: (n: string) => findByName(known, n)[0], partnerId: player.id,
+        offer: (id: string) => economy.offer(id), obligation: (id: string) => economy.obligation(id),
+      };
       trace.validation = [];
       npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
@@ -284,10 +318,26 @@ export class Engine {
       });
       const tExchange = addMinutes(t1, npcOut.minutesElapsed);
       plan.newGameTime = tExchange;
-      for (const change of accepted) plan.changes.push({ change, sourceEventId: exchange.id, gameTime: t1, channel: interaction.channel });
+      for (const change of accepted) {
+        // Decisions with mechanical consequences are executed by the economy engine; the rest are mind changes.
+        let err: string | null = null;
+        if (change.op === 'respond_to_offer') err = economy.npcRespondToOffer(target.id, change.offerId, change.accept);
+        else if (change.op === 'make_promise') err = economy.npcPromise(target.id, change.toId, change.description, null, change.dueInDays);
+        else if (change.op === 'fulfill_promise') err = economy.npcFulfill(target.id, change.promiseId);
+        else plan.changes.push({ change, sourceEventId: exchange.id, gameTime: t1, channel: interaction.channel });
+        if (err) economy.results.push(`✗ ${err}`);
+      }
     }
+    const npcResultCount = economy.results.length;
 
-    // 6. Endings.
+    // 6. Time passing: recurring charges, overdue promises.
+    economy.passTime(t0, plan.newGameTime);
+    trace.economy = {
+      actions: interp.actions, actionErrors, rejected: economy.rejected, results: economy.results,
+      ops: economy.ops.map((o) => o.op), events: economy.events.map((e) => e.id),
+    };
+
+    // 7. Endings.
     let conversationEnded = false;
     if (interaction && (endRequested || npcOut?.endsConversation)) {
       endInteraction(interaction, plan.newGameTime, npcOut?.endsConversation && !endRequested ? target!.name : player.name);
@@ -295,11 +345,14 @@ export class Engine {
     }
 
     // 7. Commit atomically, then respond.
+    const results = economy.results;
     const parts = [interp.narration.trim() || (!npcOut && interp.privateThought ? 'You turn the thought over in your head for a while.' : '')];
+    parts.push(results.slice(0, playerResultCount).join('\n'));
     if (npcOut && target) {
       if (npcOut.perceivable.trim()) parts.push(npcOut.perceivable.trim());
       if (npcOut.dialogue.trim()) parts.push(`${target.name}: “${npcOut.dialogue.trim()}”`);
     }
+    parts.push(results.slice(playerResultCount, npcResultCount).join('\n'), results.slice(npcResultCount).join('\n'));
     if (conversationEnded) parts.push(`[The ${label(interaction!.channel)} has ended.]`);
     const response = this.response(trace, plan.newGameTime, {
       status: 'committed',
@@ -308,14 +361,15 @@ export class Engine {
         ? { characterId: target.id, name: target.name, dialogue: npcOut.dialogue, perceivable: npcOut.perceivable, isNew: Boolean(pending) }
         : null,
       conversationEnded,
+      results,
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
     });
-    this.commit(game, player, plan, trace, response, input);
+    this.commit(game, player, plan, economy, trace, response, input);
     return response;
   }
 
   /** Single transaction: revision check, all writes, turn record. Throws ⇒ nothing written. */
-  private commit(game: Game, player: Character, plan: WritePlan, trace: Trace, response: TurnResponse, input: string): void {
+  private commit(game: Game, player: Character, plan: WritePlan, economy: EconomyPlanner, trace: Trace, response: TurnResponse, input: string): void {
     const store = this.store;
     const now = this.now();
     const writes: WriteRecord[] = [];
@@ -335,6 +389,7 @@ export class Engine {
         store.upsertRelationship(plan.newCharacter.relationship);
         w('relationships', 'insert', plan.newCharacter.relationship.id, 'backstory');
       }
+      for (const wr of applyOps(store, economy.ops, now)) writes.push(wr);
       for (const i of plan.interactionsToInsert) {
         store.insertInteraction(i);
         w('interactions', 'insert', i.id);
@@ -343,7 +398,7 @@ export class Engine {
         store.insertDocument(doc);
         w('documents', 'insert', doc.id, `${doc.status} ${doc.url}`);
       }
-      for (const e of plan.events) {
+      for (const e of [...plan.events, ...economy.events]) {
         store.insertEvent(e);
         w('events', 'insert', e.id, `${e.type}; observers=${e.observers.map((o) => o.characterId).join(',')}`);
       }
@@ -379,7 +434,7 @@ export class Engine {
             createdAt: now, updatedAt: now,
           });
           w('knowledge', r.op, r.id, change.topic);
-        } else {
+        } else if (change.op === 'update_relationship') {
           const op = store.upsertRelationship({
             id: newId('rel'), gameId: game.id, fromCharacterId: change.fromId, toCharacterId: change.toId, summary: change.summary,
             source: 'gameplay', sourceEventId, createdAt: now, updatedAt: now,
@@ -498,7 +553,7 @@ export class Engine {
   private response(trace: Trace, gameTime: string, r: Partial<TurnResponse> & Pick<TurnResponse, 'status' | 'text'>): TurnResponse {
     return {
       requestId: trace.requestId, turnId: trace.turnId, gameTime, narration: '', npc: null, conversationEnded: false,
-      clarificationQuestion: null, error: null, ...r,
+      clarificationQuestion: null, error: null, results: [], ...r,
     };
   }
 }

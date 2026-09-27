@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { Store } from './db/store.ts';
-import { formatCharacter, formatContext, formatEvents, formatFacts, formatStatus, formatTurn, formatTurnList } from './debug/inspect.ts';
+import { formatCharacter, formatContext, formatEvents, formatFacts, formatMoney, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
@@ -42,7 +42,8 @@ function inspect(store: Store, gameId: string, args: string[], full: boolean): s
     case 'context': return arg ? formatContext(store, gameId, args.slice(1).join(' ')) : 'usage: inspect context <name>';
     case 'events': return formatEvents(store, gameId);
     case 'facts': return formatFacts(store, gameId);
-    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts';
+    case 'money': return formatMoney(store, gameId);
+    default: return 'inspect: turns | turn <n|last> [--full] | character <name> | context <name> | events | facts | money';
   }
 }
 
@@ -59,7 +60,7 @@ function liveEngine(store: Store): Engine | null {
 
 async function play(engine: Engine, gameId: string, debug: boolean, intro: string) {
   const store = engine.store;
-  console.log(`\n${intro}\n\n(game ${gameId} — /quit to leave; everything is saved after each turn)\n`);
+  console.log(`\n${intro}\n\n(game ${gameId} — /quit to leave; everything is saved after each turn)\n\n${formatStatusLine(store, gameId)}\n`);
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     for (;;) {
@@ -75,7 +76,7 @@ async function play(engine: Engine, gameId: string, debug: boolean, intro: strin
       }
       process.stdout.write('…\r');
       const r = await engine.takeTurn({ gameId, input: line });
-      console.log(`\n${r.text}\n`);
+      console.log(`\n${r.text}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
     }

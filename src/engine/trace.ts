@@ -37,9 +37,10 @@ export interface Trace {
   interpretation?: InterpretResult;
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
-  retrieval?: ReturnType<typeof perspectiveTrace>;
+  retrieval?: ReturnType<typeof perspectiveTrace> & { economyIds?: string[] };
   documents?: { id: string; url: string; finalUrl: string; status: string; title: string | null; chars: number; error: string | null }[];
   npcOutput?: NpcTurnEnvelope;
+  economy?: { actions: unknown[]; actionErrors: string[]; rejected: { action: unknown; reason: string }[]; results: string[]; ops: string[]; events: string[] };
   validation?: { attempt: number; proposals: unknown[]; accepted: AcceptedChange[]; rejected: Rejection[] }[];
   writes?: WriteRecord[];
   committedRevision?: number;

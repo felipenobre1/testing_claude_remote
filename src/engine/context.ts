@@ -38,6 +38,7 @@ export interface NpcContextInput {
   sceneLocation: string;
   pending?: PendingCharacter;
   pendingDocuments?: WebDocument[]; // pages opened this turn (shared by the partner)
+  economy?: string; // companies this NPC is part of, offers and promises involving them (built by the economy planner)
 }
 
 export interface NpcPerspective {
@@ -191,6 +192,9 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
     'WHAT YOU KNOW OR BELIEVE (topic key: belief)',
     list(p.knowledge.map((k) => `${k.item.topic}: ${k.item.belief} (confidence ${k.item.confidence}; ${k.item.source})`)),
     '',
+    'YOUR COMPANIES, OFFERS AND PROMISES (exact figures, kept by the game)',
+    input.economy || '(none)',
+    '',
     'WEB PAGES YOU HAVE OPENED (exactly as they looked when you opened them)',
     p.documents.length ? p.documents.map((d) => renderDocument(d.doc, d.openedNow)).join('\n\n') : '(none)',
     '',
@@ -244,12 +248,13 @@ export function retrievePlayerPerspective(store: Store, gameId: string): PlayerP
   };
 }
 
-export function renderPlayerBriefing(p: PlayerPerspective, input: string): string {
+export function renderPlayerBriefing(p: PlayerPerspective, input: string, economy = ''): string {
   const names = new Map(p.knownCharacters.map((c) => [c.id, c.name]));
   const partner = p.interaction?.participantIds.filter((id) => id !== p.player.id).map((id) => names.get(id) ?? id) ?? [];
   return [
     `PLAYER CHARACTER: ${p.player.name}, ${p.player.age}. ${p.player.background}`,
     `${p.player.name.toUpperCase()}'S SITUATION: ${p.facts.map((f) => `${f.predicate}=${f.value}`).join('; ')}`,
+    `MONEY, COMPANIES AND PROMISES:\n${economy || '(none)'}`,
     `TIME: ${formatGameTime(p.gameTime)} (Milan)`,
     `LOCATION: ${p.scene.location}. ${p.scene.description}`,
     `KNOWN CHARACTERS: ${p.knownCharacters.map((c) => `${c.name} (${c.role})`).join('; ') || '(none yet)'}`,

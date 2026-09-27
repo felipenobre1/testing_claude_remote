@@ -1,16 +1,19 @@
 import type { z } from 'zod';
 import {
-  ALLOWED_OPS, CreateMemoryOpSchema, UpdateRelationshipOpSchema, UpsertKnowledgeOpSchema,
+  ALLOWED_OPS, CreateMemoryOpSchema, NpcFulfillOpSchema, NpcPromiseOpSchema, RespondToOfferOpSchema, UpdateRelationshipOpSchema, UpsertKnowledgeOpSchema,
   type CharacterProposal,
 } from '../domain/schemas.ts';
-import type { Character } from '../domain/types.ts';
+import type { Character, Obligation, Offer } from '../domain/types.ts';
 
 // The model proposes; this module decides. Anything not explicitly allowed is rejected.
 
 export type AcceptedChange =
   | { op: 'create_memory'; ownerId: string; summary: string; importance: number; emotionalWeight: number; subjectIds: string[]; notes: string[] }
   | { op: 'upsert_knowledge'; ownerId: string; topic: string; belief: string; confidence: number; sourceKind: 'told' | 'observed' | 'inferred'; aboutCharacterId: string | null; notes: string[] }
-  | { op: 'update_relationship'; fromId: string; toId: string; summary: string; notes: string[] };
+  | { op: 'update_relationship'; fromId: string; toId: string; summary: string; notes: string[] }
+  | { op: 'respond_to_offer'; ownerId: string; offerId: string; accept: boolean; notes: string[] }
+  | { op: 'make_promise'; ownerId: string; toId: string; description: string; dueInDays: number | null; notes: string[] }
+  | { op: 'fulfill_promise'; ownerId: string; promiseId: string; notes: string[] };
 
 export interface Rejection {
   index: number;
@@ -22,6 +25,9 @@ export interface ValidationContext {
   npc: Character;
   observerIds: string[]; // who perceived the exchange these changes come from
   findCharacter: (name: string) => Character | undefined;
+  partnerId?: string; // who the NPC is talking to (creditor of NPC promises)
+  offer?: (id: string) => Offer | undefined;
+  obligation?: (id: string) => Obligation | undefined;
 }
 
 /** Operations the model is known to reach for that are never allowed through conversation. */
@@ -81,6 +87,29 @@ export function validateChanges(raw: unknown[], ctx: ValidationContext): { accep
         else notes.push(`unknown subject "${r.data.aboutCharacterName}" not linked`);
       }
       accepted.push({ op: 'upsert_knowledge', ownerId, topic: r.data.topic, belief: r.data.belief, confidence: r.data.confidence, sourceKind: r.data.sourceKind, aboutCharacterId, notes });
+    } else if (op === 'respond_to_offer') {
+      const r = RespondToOfferOpSchema.safeParse(proposal);
+      if (!r.success) return reject(`invalid respond_to_offer: ${zodReason(r.error)}`);
+      const offer = ctx.offer?.(r.data.offerId);
+      if (!offer || offer.toCharacterId !== ownerId) return reject(`no offer ${r.data.offerId} was made to ${ctx.npc.name}`);
+      if (offer.status !== 'pending') return reject(`offer ${r.data.offerId} is already ${offer.status}`);
+      if (seen.has(`offer:${offer.id}`)) return reject('duplicate answer to the same offer');
+      seen.add(`offer:${offer.id}`);
+      accepted.push({ op: 'respond_to_offer', ownerId, offerId: offer.id, accept: r.data.accept, notes: [] });
+    } else if (op === 'make_promise') {
+      const r = NpcPromiseOpSchema.safeParse(proposal);
+      if (!r.success) return reject(`invalid make_promise: ${zodReason(r.error)}`);
+      if (!ctx.partnerId) return reject('make_promise: nobody to promise to');
+      if (r.data.amountEur !== null && r.data.amountEur > 0) return reject('make_promise: NPC money promises are not supported yet (promise help, work or time instead)');
+      if (r.data.dueInDays !== null && (r.data.dueInDays < 0 || r.data.dueInDays > 3650)) return reject('make_promise: dueInDays must be between 0 and 3650');
+      accepted.push({ op: 'make_promise', ownerId, toId: ctx.partnerId, description: r.data.description, dueInDays: r.data.dueInDays, notes: [] });
+    } else if (op === 'fulfill_promise') {
+      const r = NpcFulfillOpSchema.safeParse(proposal);
+      if (!r.success) return reject(`invalid fulfill_promise: ${zodReason(r.error)}`);
+      const o = ctx.obligation?.(r.data.promiseId);
+      if (!o || o.debtorId !== ownerId) return reject(`no promise ${r.data.promiseId} made by ${ctx.npc.name}`);
+      if (o.status !== 'open') return reject(`promise ${r.data.promiseId} is already ${o.status}`);
+      accepted.push({ op: 'fulfill_promise', ownerId, promiseId: o.id, notes: [] });
     } else {
       const r = UpdateRelationshipOpSchema.safeParse(proposal);
       if (!r.success) return reject(`invalid update_relationship: ${zodReason(r.error)}`);

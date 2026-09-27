@@ -5,6 +5,7 @@ import { MIGRATIONS } from './migrations.ts';
 import type {
   Character, Fact, Game, GameEvent, Interaction, Knowledge, Memory, Relationship, Scene,
   TurnRow, TurnStatus, TurnResponse, WebDocument,
+  Account, Company, Obligation, Offer, RecurringPayment, Shareholding, Transaction,
 } from '../domain/types.ts';
 
 type Row = Record<string, any>;
@@ -311,6 +312,126 @@ export class Store {
     ).map(mapDocument);
   }
 
+  // ---------- economy ----------
+  insertAccount(a: Account): void {
+    this.run(
+      `INSERT INTO accounts (id, game_id, owner_kind, owner_id, balance_cents, created_at, updated_at)
+       VALUES (:id, :gameId, :ownerKind, :ownerId, :balanceCents, :createdAt, :updatedAt)`, { ...a });
+  }
+  getAccountOf(gameId: string, ownerKind: Account['ownerKind'], ownerId: string): Account | undefined {
+    const r = this.get('SELECT * FROM accounts WHERE game_id = :gameId AND owner_kind = :k AND owner_id = :o', { gameId, k: ownerKind, o: ownerId });
+    return r && mapAccount(r);
+  }
+  getAccount(id: string): Account | undefined {
+    const r = this.get('SELECT * FROM accounts WHERE id = :id', { id });
+    return r && mapAccount(r);
+  }
+  listAccounts(gameId: string): Account[] {
+    return this.all('SELECT * FROM accounts WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapAccount);
+  }
+  /** Moves money and records it. Throws if a paying account would go negative. */
+  transfer(t: Transaction): void {
+    if (t.fromAccountId) {
+      const from = this.getAccount(t.fromAccountId);
+      if (!from) throw new Error(`account ${t.fromAccountId} not found`);
+      if (from.balanceCents < t.amountCents) throw new Error(`insufficient funds in ${t.fromAccountId}`);
+      this.run('UPDATE accounts SET balance_cents = balance_cents - :a, updated_at = :t WHERE id = :id', { a: t.amountCents, t: t.createdAt, id: t.fromAccountId });
+    }
+    if (t.toAccountId) {
+      this.run('UPDATE accounts SET balance_cents = balance_cents + :a, updated_at = :t WHERE id = :id', { a: t.amountCents, t: t.createdAt, id: t.toAccountId });
+    }
+    this.run(
+      `INSERT INTO transactions (id, game_id, turn_id, from_account_id, to_account_id, amount_cents, description, category, game_time, created_at)
+       VALUES (:id, :gameId, :turnId, :fromAccountId, :toAccountId, :amountCents, :description, :category, :gameTime, :createdAt)`, { ...t });
+  }
+  listTransactions(gameId: string): Transaction[] {
+    return this.all('SELECT * FROM transactions WHERE game_id = :gameId ORDER BY game_time, rowid', { gameId }).map(mapTransaction);
+  }
+
+  insertCompany(c: Company): void {
+    this.run(
+      `INSERT INTO companies (id, game_id, name, description, product_stage, total_shares, founded_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :name, :description, :productStage, :totalShares, :foundedGameTime, :createdAt, :updatedAt)`, { ...c });
+  }
+  getCompany(id: string): Company | undefined {
+    const r = this.get('SELECT * FROM companies WHERE id = :id', { id });
+    return r && mapCompany(r);
+  }
+  listCompanies(gameId: string): Company[] {
+    return this.all('SELECT * FROM companies WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapCompany);
+  }
+  updateCompany(c: Company): void {
+    this.run('UPDATE companies SET product_stage = :productStage, total_shares = :totalShares, description = :description, updated_at = :updatedAt WHERE id = :id', { ...c });
+  }
+  insertShareholding(h: Shareholding): void {
+    this.run(
+      `INSERT INTO shareholdings (company_id, character_id, shares, role, acquired_game_time)
+       VALUES (:companyId, :characterId, :shares, :role, :acquiredGameTime)`, { ...h });
+  }
+  listShareholdings(companyId: string): Shareholding[] {
+    return this.all('SELECT * FROM shareholdings WHERE company_id = :c ORDER BY acquired_game_time, rowid', { c: companyId }).map(mapShareholding);
+  }
+  /** Perspective query: companies this character holds shares in. */
+  listCompaniesOf(characterId: string): Company[] {
+    return this.all(
+      'SELECT c.* FROM companies c JOIN shareholdings h ON h.company_id = c.id WHERE h.character_id = :ch ORDER BY c.rowid', { ch: characterId },
+    ).map(mapCompany);
+  }
+
+  insertOffer(o: Offer): void {
+    this.run(
+      `INSERT INTO offers (id, game_id, company_id, from_character_id, to_character_id, kind, equity_percent, role, status, created_game_time, resolved_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :companyId, :fromCharacterId, :toCharacterId, :kind, :equityPercent, :role, :status, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`, { ...o });
+  }
+  getOffer(id: string): Offer | undefined {
+    const r = this.get('SELECT * FROM offers WHERE id = :id', { id });
+    return r && mapOffer(r);
+  }
+  resolveOffer(id: string, status: 'accepted' | 'rejected', gameTime: string, now: string): void {
+    this.run('UPDATE offers SET status = :status, resolved_game_time = :gameTime, updated_at = :now WHERE id = :id', { id, status, gameTime, now });
+  }
+  listOffers(gameId: string): Offer[] {
+    return this.all('SELECT * FROM offers WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapOffer);
+  }
+  /** Perspective query: offers this character made or received. */
+  listOffersInvolving(characterId: string): Offer[] {
+    return this.all('SELECT * FROM offers WHERE from_character_id = :c OR to_character_id = :c ORDER BY rowid', { c: characterId }).map(mapOffer);
+  }
+
+  insertObligation(o: Obligation): void {
+    this.run(
+      `INSERT INTO obligations (id, game_id, debtor_id, creditor_id, description, amount_cents, due_game_time, status, overdue_notified, created_game_time, resolved_game_time, created_at, updated_at)
+       VALUES (:id, :gameId, :debtorId, :creditorId, :description, :amountCents, :dueGameTime, :status, :overdue, :createdGameTime, :resolvedGameTime, :createdAt, :updatedAt)`,
+      { ...o, overdue: o.overdueNotified ? 1 : 0 });
+  }
+  getObligation(id: string): Obligation | undefined {
+    const r = this.get('SELECT * FROM obligations WHERE id = :id', { id });
+    return r && mapObligation(r);
+  }
+  updateObligation(o: Obligation): void {
+    this.run('UPDATE obligations SET status = :status, overdue_notified = :overdue, resolved_game_time = :resolvedGameTime, updated_at = :updatedAt WHERE id = :id',
+      { ...o, overdue: o.overdueNotified ? 1 : 0 });
+  }
+  listObligations(gameId: string): Obligation[] {
+    return this.all('SELECT * FROM obligations WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapObligation);
+  }
+  /** Perspective query: obligations this character is a party to. */
+  listObligationsInvolving(characterId: string): Obligation[] {
+    return this.all('SELECT * FROM obligations WHERE debtor_id = :c OR creditor_id = :c ORDER BY rowid', { c: characterId }).map(mapObligation);
+  }
+
+  insertRecurringPayment(r: RecurringPayment): void {
+    this.run(
+      `INSERT INTO recurring_payments (id, game_id, account_id, description, amount_cents, next_due_game_time, active, created_at)
+       VALUES (:id, :gameId, :accountId, :description, :amountCents, :nextDueGameTime, :active, :createdAt)`, { ...r, active: r.active ? 1 : 0 });
+  }
+  listRecurringPayments(gameId: string): RecurringPayment[] {
+    return this.all('SELECT * FROM recurring_payments WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapRecurring);
+  }
+  updateRecurringPayment(r: RecurringPayment): void {
+    this.run('UPDATE recurring_payments SET next_due_game_time = :nextDueGameTime, active = :active WHERE id = :id', { ...r, active: r.active ? 1 : 0 });
+  }
+
   // ---------- turns ----------
   getFinalTurnByRequest(gameId: string, requestId: string): TurnRow | undefined {
     const r = this.get(
@@ -422,6 +543,44 @@ function mapDocument(r: Row): WebDocument {
   return {
     id: r.id, gameId: r.game_id, url: r.url, finalUrl: r.final_url, status: r.status, title: r.title, text: r.text,
     error: r.error, fetchedAt: r.fetched_at, gameTime: r.game_time, createdAt: r.created_at,
+  };
+}
+function mapAccount(r: Row): Account {
+  return { id: r.id, gameId: r.game_id, ownerKind: r.owner_kind, ownerId: r.owner_id, balanceCents: r.balance_cents, createdAt: r.created_at, updatedAt: r.updated_at };
+}
+function mapTransaction(r: Row): Transaction {
+  return {
+    id: r.id, gameId: r.game_id, turnId: r.turn_id, fromAccountId: r.from_account_id, toAccountId: r.to_account_id, amountCents: r.amount_cents,
+    description: r.description, category: r.category, gameTime: r.game_time, createdAt: r.created_at,
+  };
+}
+function mapCompany(r: Row): Company {
+  return {
+    id: r.id, gameId: r.game_id, name: r.name, description: r.description, productStage: r.product_stage, totalShares: r.total_shares,
+    foundedGameTime: r.founded_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function mapShareholding(r: Row): Shareholding {
+  return { companyId: r.company_id, characterId: r.character_id, shares: r.shares, role: r.role, acquiredGameTime: r.acquired_game_time };
+}
+function mapOffer(r: Row): Offer {
+  return {
+    id: r.id, gameId: r.game_id, companyId: r.company_id, fromCharacterId: r.from_character_id, toCharacterId: r.to_character_id, kind: r.kind,
+    equityPercent: r.equity_percent, role: r.role, status: r.status, createdGameTime: r.created_game_time, resolvedGameTime: r.resolved_game_time,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function mapObligation(r: Row): Obligation {
+  return {
+    id: r.id, gameId: r.game_id, debtorId: r.debtor_id, creditorId: r.creditor_id, description: r.description, amountCents: r.amount_cents,
+    dueGameTime: r.due_game_time, status: r.status, overdueNotified: r.overdue_notified === 1, createdGameTime: r.created_game_time,
+    resolvedGameTime: r.resolved_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function mapRecurring(r: Row): RecurringPayment {
+  return {
+    id: r.id, gameId: r.game_id, accountId: r.account_id, description: r.description, amountCents: r.amount_cents,
+    nextDueGameTime: r.next_due_game_time, active: r.active === 1, createdAt: r.created_at,
   };
 }
 function mapTurn(r: Row): TurnRow {

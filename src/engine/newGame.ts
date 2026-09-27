@@ -9,6 +9,7 @@ export interface NewGameOptions {
 
 export const START_TIME = '2026-09-27T09:14'; // Sunday, Europe/Rome
 export const TIMEZONE = 'Europe/Rome';
+export const STARTING_CASH_CENTS = 250_000;
 
 /** Creates a game containing only the player, the player's canonical facts and the opening scene. */
 export function createGame(store: Store, opts: NewGameOptions = {}): { game: Game; player: Character } {
@@ -50,13 +51,9 @@ export function createGame(store: Store, opts: NewGameOptions = {}): { game: Gam
   store.tx(() => {
     store.insertGame(game);
     store.insertCharacter(player);
-    for (const [predicate, value] of [
-      ['cash_eur', '2500'],
-      ['housing', 'lives with parents'],
-      ['company', 'none'],
-    ] as const) {
-      store.insertFact({ id: newId('fact'), gameId, subject: player.id, predicate, value, createdAt: now, updatedAt: now });
-    }
+    store.insertFact({ id: newId('fact'), gameId, subject: player.id, predicate: 'housing', value: 'lives with parents', createdAt: now, updatedAt: now });
+    // Money is canonical state in the ledger, never a free-text fact.
+    store.insertAccount({ id: newId('acct'), gameId, ownerKind: 'character', ownerId: player.id, balanceCents: STARTING_CASH_CENTS, createdAt: now, updatedAt: now });
     store.insertScene({
       id: newId('scn'),
       gameId,

@@ -199,4 +199,100 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (event_id, document_id)
   );
   `,
+
+  /* v3 — Milestone 2: money, companies, equity, obligations */ `
+  -- Money lives in accounts and only moves through transactions (integer cents).
+  CREATE TABLE accounts (
+    id            TEXT PRIMARY KEY,
+    game_id       TEXT NOT NULL REFERENCES games(id),
+    owner_kind    TEXT NOT NULL CHECK (owner_kind IN ('character', 'company')),
+    owner_id      TEXT NOT NULL,
+    balance_cents INTEGER NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (game_id, owner_kind, owner_id)
+  );
+  -- Ledger. NULL from/to = the outside world (shops, hosting, salaries from outside).
+  CREATE TABLE transactions (
+    id              TEXT PRIMARY KEY,
+    game_id         TEXT NOT NULL REFERENCES games(id),
+    turn_id         TEXT,
+    from_account_id TEXT REFERENCES accounts(id),
+    to_account_id   TEXT REFERENCES accounts(id),
+    amount_cents    INTEGER NOT NULL CHECK (amount_cents > 0),
+    description     TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    game_time       TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    CHECK (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
+  );
+  CREATE TABLE companies (
+    id                TEXT PRIMARY KEY,
+    game_id           TEXT NOT NULL REFERENCES games(id),
+    name              TEXT NOT NULL,
+    description       TEXT NOT NULL,
+    product_stage     TEXT NOT NULL CHECK (product_stage IN ('idea', 'prototype', 'mvp', 'launched')),
+    total_shares      INTEGER NOT NULL CHECK (total_shares > 0),
+    founded_game_time TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE (game_id, name)
+  );
+  CREATE TABLE shareholdings (
+    company_id         TEXT NOT NULL REFERENCES companies(id),
+    character_id       TEXT NOT NULL REFERENCES characters(id),
+    shares             INTEGER NOT NULL CHECK (shares > 0),
+    role               TEXT NOT NULL,
+    acquired_game_time TEXT NOT NULL,
+    PRIMARY KEY (company_id, character_id)
+  );
+  -- Offers need the other person's decision (made by the NPC, executed by the engine).
+  CREATE TABLE offers (
+    id                 TEXT PRIMARY KEY,
+    game_id            TEXT NOT NULL REFERENCES games(id),
+    company_id         TEXT NOT NULL REFERENCES companies(id),
+    from_character_id  TEXT NOT NULL REFERENCES characters(id),
+    to_character_id    TEXT NOT NULL REFERENCES characters(id),
+    kind               TEXT NOT NULL CHECK (kind IN ('join_company')),
+    equity_percent     REAL NOT NULL CHECK (equity_percent > 0 AND equity_percent < 100),
+    role               TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected')),
+    created_game_time  TEXT NOT NULL,
+    resolved_game_time TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+  );
+  -- Promises and debts. The engine knows objectively that they exist; characters remember them.
+  CREATE TABLE obligations (
+    id                 TEXT PRIMARY KEY,
+    game_id            TEXT NOT NULL REFERENCES games(id),
+    debtor_id          TEXT NOT NULL REFERENCES characters(id),
+    creditor_id        TEXT NOT NULL REFERENCES characters(id),
+    description        TEXT NOT NULL,
+    amount_cents       INTEGER CHECK (amount_cents IS NULL OR amount_cents > 0),
+    due_game_time      TEXT,
+    status             TEXT NOT NULL CHECK (status IN ('open', 'fulfilled', 'cancelled')),
+    overdue_notified   INTEGER NOT NULL DEFAULT 0,
+    created_game_time  TEXT NOT NULL,
+    resolved_game_time TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+  );
+  CREATE TABLE recurring_payments (
+    id                 TEXT PRIMARY KEY,
+    game_id            TEXT NOT NULL REFERENCES games(id),
+    account_id         TEXT NOT NULL REFERENCES accounts(id),
+    description        TEXT NOT NULL,
+    amount_cents       INTEGER NOT NULL CHECK (amount_cents > 0),
+    next_due_game_time TEXT NOT NULL,
+    active             INTEGER NOT NULL DEFAULT 1,
+    created_at         TEXT NOT NULL
+  );
+
+  -- Existing saves: the player's cash Fact becomes a real account; "company = none" is now derived.
+  INSERT INTO accounts (id, game_id, owner_kind, owner_id, balance_cents, created_at, updated_at)
+    SELECT 'acct_' || id, game_id, 'character', subject, CAST(ROUND(CAST(value AS REAL) * 100) AS INTEGER), created_at, updated_at
+    FROM facts WHERE predicate = 'cash_eur';
+  DELETE FROM facts WHERE predicate IN ('cash_eur', 'company');
+  `,
 ];
