@@ -1,0 +1,148 @@
+import { z } from 'zod';
+
+// ============================================================================
+// World creation (engine-level, pack-agnostic).
+//
+//   WorldDraft  — editable, collaborative design built through conversation. Not canonical.
+//   WorldSeed   — the approved starting specification AND design contract of one game. Immutable.
+//   Game state  — what actually happens after play begins (characters, events, …).
+// ============================================================================
+
+export const CANON_POLICIES = [
+  'background_only', // existing canon/history is inspiration only
+  'history_continues_unless_changed', // established history proceeds unless the story changes it
+  'alternate_from_start', // an alternate timeline from the moment play begins
+  'original_world', // a custom world with no external canon
+] as const;
+export type CanonPolicy = (typeof CANON_POLICIES)[number];
+
+const text = (max: number) => z.string().max(max);
+const opt = (max: number) => z.string().max(max).nullable();
+
+/** A person who already exists when the story starts. Only those the opening needs. */
+const DraftActorSchema = z.strictObject({
+  name: z.string().min(1).max(80),
+  age: z.number().int().min(1).max(120).nullable(),
+  role: text(120), // their place in the world
+  description: text(600), // who they are
+  personality: opt(400),
+  goals: z.array(text(200)).max(4),
+  relationshipToPlayer: opt(400), // how THEY see the player, if they know them
+});
+
+/** A situation already in motion at the start. Conditions only — it has no outcome. */
+const DraftSituationSchema = z.strictObject({
+  title: z.string().min(3).max(120),
+  summary: z.string().min(10).max(600),
+  involves: z.array(z.string().max(80)).max(6), // actor names, or "player"
+});
+
+export const WorldDraftSchema = z.object({
+  packId: opt(40), // which game pack runs this world (mechanics); chosen with the player
+  premise: opt(600), // the story/world in one or two sentences
+  sourceWorld: opt(120), // "the real world", "Dune", null = original
+  canonPolicy: z.enum(CANON_POLICIES).nullable(),
+  setting: z.strictObject({
+    place: opt(160),
+    era: opt(160),
+    startDate: opt(16), // local wall time 'YYYY-MM-DDTHH:MM' (any calendar mapped to this form)
+    timezone: opt(60),
+    description: opt(800),
+  }),
+  style: z.strictObject({
+    tone: opt(200),
+    realism: opt(200),
+    difficulty: opt(200),
+    narrativeStyle: opt(200),
+    playerSignificance: opt(200), // e.g. "starts insignificant; no chosen one"
+  }),
+  designPrinciples: z.array(text(240)).max(10), // e.g. "do not manufacture destiny around the player"
+  worldRules: z.array(text(240)).max(10), // physics, technology or magic, institutions
+  player: z.strictObject({
+    name: opt(80),
+    age: z.number().int().min(1).max(120).nullable(),
+    gender: opt(40),
+    occupation: opt(160),
+    background: opt(1200),
+    personality: opt(400),
+    skills: z.array(text(120)).max(8),
+    goals: z.array(text(200)).max(5),
+    fears: z.array(text(200)).max(5),
+    location: opt(160), // where they live
+    circumstances: z.array(text(200)).max(6), // canonical facts about their situation ("lives with parents")
+    startingMoney: z.number().nullable(), // in the world's currency (major units)
+    currency: z.strictObject({ code: text(10), symbol: text(4) }).nullable(),
+    possessions: z.array(text(160)).max(8),
+    knowledge: z.array(text(240)).max(8), // what the player character knows at the start
+  }),
+  locations: z.array(z.strictObject({ name: text(120), description: text(400) })).max(6),
+  factions: z.array(z.strictObject({ name: text(120), description: text(400) })).max(6),
+  actors: z.array(DraftActorSchema).max(6),
+  historicalContext: opt(1200),
+  currentSituation: opt(1200),
+  initialPressures: z.array(text(240)).max(6),
+  initialSituations: z.array(DraftSituationSchema).max(4),
+  startingScene: z.strictObject({ location: opt(160), description: opt(600) }),
+  unresolvedQuestions: z.array(text(240)).max(8),
+  contradictions: z.array(text(300)).max(6), // incompatible requirements still to be resolved
+});
+export type WorldDraft = z.infer<typeof WorldDraftSchema>;
+
+export const EMPTY_DRAFT: WorldDraft = {
+  packId: null, premise: null, sourceWorld: null, canonPolicy: null,
+  setting: { place: null, era: null, startDate: null, timezone: null, description: null },
+  style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null },
+  designPrinciples: [], worldRules: [],
+  player: { name: null, age: null, gender: null, occupation: null, background: null, personality: null, skills: [], goals: [], fears: [], location: null,
+    circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [] },
+  locations: [], factions: [], actors: [], historicalContext: null, currentSituation: null, initialPressures: [], initialSituations: [],
+  startingScene: { location: null, description: null }, unresolvedQuestions: [], contradictions: [],
+};
+
+export const COPILOT_INTENTS = ['discuss', 'summarize', 'request_finalize', 'confirm_finalize', 'abandon'] as const;
+
+/** One Copilot turn: its reply, the whole updated draft, and what the player wants now. */
+export const CopilotTurnSchema = z.object({
+  reply: z.string().min(1).max(4000),
+  draft: WorldDraftSchema,
+  intent: z.enum(COPILOT_INTENTS),
+  /** For confirm_finalize / abandon: the player's own words expressing it (checked against their message). */
+  approvalQuote: z.string().max(300).nullable(),
+});
+export type CopilotTurn = z.infer<typeof CopilotTurnSchema>;
+
+/** The approved design contract of a game. Written once at finalization, never rewritten. */
+export interface WorldSeed {
+  gameId: string;
+  draftId: string | null;
+  packId: string;
+  createdAt: string;
+  premise: string;
+  world: {
+    sourceWorld: string | null;
+    canonPolicy: CanonPolicy;
+    place: string;
+    era: string;
+    startDate: string;
+    timezone: string;
+    description: string;
+    rules: string[];
+    historicalContext: string | null;
+    currentSituation: string;
+    locations: { name: string; description: string }[];
+    factions: { name: string; description: string }[];
+  };
+  style: {
+    tone: string;
+    realism: string;
+    difficulty: string | null;
+    narrativeStyle: string | null;
+    playerSignificance: string;
+    designPrinciples: string[];
+  };
+  player: WorldDraft['player'] & { name: string; age: number; background: string };
+  actors: WorldDraft['actors'];
+  initialPressures: string[];
+  initialSituations: WorldDraft['initialSituations']; // conditions only
+  startingScene: { location: string; description: string };
+}

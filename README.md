@@ -1,4 +1,4 @@
-# Living Story Engine — Game Pack: Startup
+# Living Story Engine
 
 A persistent world played through natural language. It has no script, no chapters and no predetermined ending.
 
@@ -14,13 +14,18 @@ The code has two layers:
   - the Decision Resolution Engine
   - World Turns, Story Threads and the Story Director
   - context building, validation, persistence and traces
-- **Game Pack** (`src/packs/<pack>/`) — defines what kind of world it is:
-  - setting and starting situation
+- **Game Pack** (`src/packs/<pack>/`) — defines what kind of mechanics the world runs on:
+  - guidance and an example world for the World Creation Copilot
   - the kinds of offers people make and what accepting them does
   - world-specific actions and state
   - prompt flavour and status line
 
-**Startup** (`src/packs/startup/`) is the first and only playable pack. You play an 18-year-old in the real Milan, September 2026, with €2,500. The pack adds companies, cap tables and product stage, plus four offer kinds: cofounder, job, customer purchase and investment. Other worlds (political sci-fi, fantasy, medieval) would be new packs on the same engine; `test/engine/pack.test.ts` runs a tiny medieval test pack to prove it.
+Two packs ship:
+
+- **Startup** (`src/packs/startup/`) — companies, cap tables and product stage, plus four offer kinds: cofounder, job, customer purchase and investment. Its example world is an 18-year-old in the real Milan, September 2026, with €2,500.
+- **Open World** (`src/packs/open/`) — the engine's generic mechanics only (people, money, promises, deals, decisions, world turns). Use it for any other world: fantasy, science fiction, history, or a known fictional universe used as a reference.
+
+**The world itself is designed with you.** `npm start -- new` opens the **World Creation Copilot**, a conversation that builds a draft of the world; you approve a final summary and the game is created from it (see *World creation* below).
 
 The model portrays people and proposes; the engine resolves, validates and commits. SQLite is canonical.
 
@@ -35,14 +40,46 @@ npm run typecheck
 
 export OPENAI_API_KEY=sk-...  # live play / smoke test only
 export OPENAI_MODEL=gpt-6-luna   # optional (default gpt-6-luna)
-npm start -- new              # new game: Felipe, 18, Milan, Sunday 27 Sep 2026 09:14
+npm start -- new              # design a world with the Copilot, approve it, play (resumes an unfinished draft)
+npm start -- new --fresh      # start a new draft even if one is unfinished
+npm start -- new --quick      # skip the conversation: Felipe, 18, Milan, Sunday 27 Sep 2026 09:14
+npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
-npm run smoke                 # live two-session Milestone 1 run; skips without key/network
+npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
+npm run smoke                 # live multi-session run incl. a Copilot conversation; skips without key/network
 ```
 
 The database defaults to `data/startup.db`. Override it with `--db <path>` or `STARTUP_DB`.
 
-You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low) and `OPENAI_EFFORT_NPC` (medium).
+You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (medium).
+
+## World creation
+
+```
+IDEA → Copilot conversation → WORLD DRAFT → validate → final summary → explicit approval
+     → WORLD SEED (immutable) → canonical game → living story
+```
+
+- **Just talk.** Describe the world however you like ("something like Dune, I'm a water-seller's apprentice"). There's no form. The Copilot proposes concrete defaults and asks only about what the start needs. If you drift into details that can emerge in play, it tells you: "we don't need to decide that yet".
+- **Contradictions are challenged, not resolved silently.** "A nobody whose father rules the planet" goes into the draft's `contradictions` and blocks finalization until you settle it.
+- **Known worlds are references.** You and the Copilot agree a canon policy: `background_only`, `history_continues_unless_changed`, `alternate_from_start` or `original_world`.
+- **Starting situations are conditions, never outcomes.** Only the people the opening needs are created. Everyone else is generated later, when play needs them.
+- **The draft persists.** Every message and every revision is saved, so `/quit` and `npm start -- new` pick up where you left off. Commands:
+  - `/draft` — what's decided (no model call)
+  - `/finalize` — the final summary, or what's still missing
+  - `/approve` — approve the summary
+  - `/abandon`
+- **Approval is explicit.** The game is created only when you approve the exact summary you were shown, either with `/approve` or in your own words. If the model says "confirm", the engine checks the approval phrase appears in your message. Approving and changing something in the same message produces a new summary. Nothing canonical (characters, events, money) exists before approval.
+- **The WorldSeed is the game's design contract.** It holds premise, setting, canon policy, tone, realism, player significance, design principles, world rules and the starting state. It's written once per game, and a trigger blocks updates. Every Story Director review receives it as the *world bible*, and every interpreter, NPC and character-generation prompt receives its setting line and rules, so the story doesn't drift over a long game.
+- **Three separate layers:** `world_drafts` (editable, not canonical), `world_seeds` (approved, immutable) and game state (what happens in play).
+
+The code:
+
+- `src/domain/world.ts` — WorldDraft, WorldSeed and the Copilot turn schema
+- `src/engine/creation.ts` — the Copilot conversation and finalization rules
+- `src/engine/worldSeed.ts` — compile, create the canonical game, bible and summary text
+
+All three are generic. Packs only contribute `worldCreation: { summary, guidance, template }`.
 
 ## Inspect a turn
 
@@ -97,12 +134,15 @@ src/
     world.ts                    World Turn Engine, Story Threads, Story Director (propose → validate → commit)
     random.ts                   seeded randomness (same seed ⇒ same result; replays never reroll)
     validate.ts                 allowlists: NPC changes, portrayals vs resolved outcomes, generated characters, decision states
-    prompts.ts                  prompt templates (setting text comes from the pack)
-    newGame.ts                  generic world seeding
+    prompts.ts                  prompt templates (setting text comes from the game's WorldSeed)
+    creation.ts                 World Creation Copilot: conversation → draft → summary → explicit approval
+    worldSeed.ts                draft compiler, canonical game creation, world bible
     web.ts, trace.ts, util.ts   shared links, trace shape, time helpers
   packs/
     types.ts                    GamePack contract (the only boundary between engine and world)
-    startup/                    GAME PACK: STARTUP — companies, cap tables, product stage, offer kinds, actions, seed, prompts
+    startup/                    GAME PACK: STARTUP — companies, cap tables, product stage, offer kinds, actions, example world, prompts
+    open/                       GAME PACK: OPEN WORLD — generic mechanics only (a `deal` offer kind), for any designed world
+    index.ts                    the app's pack registry (the engine never imports it)
   db/                           SQLite: core migrations + per-pack migrations, typed store
   domain/                       record types and zod schemas (engine-level)
   llm/                          LLMProvider interface; OpenAIProvider (Responses API); ScriptedProvider (tests)
@@ -113,7 +153,8 @@ src/
 
 | Generic engine | Startup pack |
 |---|---|
-| Character, Relationship, Memory, Knowledge, Event + observers, Fact, Scene | the player (Felipe, 18, Milan) and the opening |
+| World Creation Copilot, WorldDraft, WorldSeed, world bible | guidance and the example world (Felipe, 18, Milan) |
+| Character, Relationship, Memory, Knowledge, Event + observers, Fact, Scene | — |
 | Time, World Turns, World Schedule | — |
 | Resources: accounts owned by characters or pack **entities**; ledger; monthly flows | companies as entities; company cash |
 | Offers (generic `kind`, subject, label, numeric `terms`) and counter-offers | offer kinds `join_company`, `hire`, `purchase`, `investment` and what accepting them does (issuing shares, salaries, subscriptions, investment) |
@@ -238,7 +279,9 @@ Code decides everything that has an objective answer; the model only proposes.
 
 | Table | Purpose |
 |---|---|
-| `games` | id, timezone (Europe/Rome), `game_time` (local wall clock), player id, **revision** |
+| `games` | id, **pack id**, timezone, `game_time` (local wall clock), player id, **revision** |
+| `world_drafts` + `draft_messages` | World Creation drafts (status, draft JSON, version, which version the pending summary showed, resulting game) and the whole Copilot conversation |
+| `world_seeds` | one approved WorldSeed per game — immutable (an update trigger aborts) |
 | `characters` | stable identity only: name, age, gender, role, occupation, background, personality, traits/values/goals/fears (JSON), location, origin (`seed`/`generated`) |
 | `relationships` | **directional** `from → to` summary, source (`backstory`/`gameplay`), source event. No numeric scores. |
 | `facts` | canonical truth (`subject, predicate, value`) — never money (money lives in the ledger) |
@@ -271,4 +314,6 @@ Code decides everything that has an objective answer; the model only proposes.
 - All-or-nothing validation: one bad proposal fails the whole turn after one retry.
 - Threads are resolved by one actor's decision. Branching and merging threads, and group decisions (a council, a board), are not modelled yet.
 - NPCs only act through threads, deferred decisions and scheduled messages; there is no free-running NPC agency beyond what the Director proposes.
+- The Copilot returns the whole draft each turn. On a very large world that costs tokens, and a careless model could drop a field. Revisions are visible in `/draft`, and nothing becomes canonical before the summary is approved.
+- Starting characters from a draft get light identity (role, description, goals). Richer detail emerges in play.
 - The Story Director only runs live (a model call per game day); it is exercised with scripted proposals in tests.

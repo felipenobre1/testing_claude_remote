@@ -5,7 +5,16 @@ import { findByName } from '../engine/turn.ts';
 import { formatGameTime, truncate } from '../engine/util.ts';
 import { formatMoney as formatMoney2 } from '../engine/planner.ts';
 import type { GamePack } from '../packs/types.ts';
+import { packById } from '../packs/index.ts';
 import { startupPack } from '../packs/startup/index.ts';
+import type { WorldSeed } from '../domain/world.ts';
+
+/** The game's pack, with the currency its world was created with. */
+export function packFor(store: Store, gameId: string): GamePack {
+  const pack = packById(store.getGame(gameId)?.packId ?? '') ?? startupPack;
+  const currency = store.getWorldSeed<WorldSeed>(gameId)?.player.currency;
+  return currency ? { ...pack, currency } : pack;
+}
 
 // Plain-text views over canonical state and turn traces, for the CLI.
 
@@ -131,7 +140,7 @@ export function formatEvents(store: Store, gameId: string): string {
   ).join('\n') || '(no events)';
 }
 
-export function formatMoney(store: Store, gameId: string, pack: GamePack = startupPack): string {
+export function formatMoney(store: Store, gameId: string, pack: GamePack = packFor(store, gameId)): string {
   const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name]));
   const money = (c: number) => formatMoney2(c, pack.currency.symbol);
   const owner = (acctId: string | null) => {
@@ -183,7 +192,7 @@ export function formatFacts(store: Store, gameId: string): string {
 }
 
 /** One-line game HUD, built only from canonical state: time · place · cash · companies · promises · conversation. */
-export function formatStatusLine(store: Store, gameId: string, pack: GamePack = startupPack): string {
+export function formatStatusLine(store: Store, gameId: string, pack: GamePack = packFor(store, gameId)): string {
   const game = store.getGame(gameId)!;
   const me = game.playerCharacterId;
   const scene = store.getScene(gameId);

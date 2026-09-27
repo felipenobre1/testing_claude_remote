@@ -437,4 +437,40 @@ export const MIGRATIONS: Migration[] = [
   -- Game packs own their own tables; this records which pack migrations ran.
   CREATE TABLE pack_migrations (pack TEXT NOT NULL, version INTEGER NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (pack, version));
   ` },
+
+  /* v6 — World creation: drafts built with the Copilot, immutable world seeds, game → pack. */ `
+  ALTER TABLE games ADD COLUMN pack_id TEXT NOT NULL DEFAULT 'startup';
+
+  -- Editable, collaborative design. Not canonical: nothing here belongs to any game until finalized.
+  CREATE TABLE world_drafts (
+    id              TEXT PRIMARY KEY,
+    status          TEXT NOT NULL CHECK (status IN ('drafting', 'awaiting_approval', 'finalized', 'abandoned')),
+    draft_json      TEXT NOT NULL,
+    version         INTEGER NOT NULL,          -- bumped whenever the draft changes
+    summary_version INTEGER,                   -- draft version the last final summary described
+    game_id         TEXT,                      -- set on finalization
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+  );
+  CREATE TABLE draft_messages (
+    id         TEXT PRIMARY KEY,
+    draft_id   TEXT NOT NULL REFERENCES world_drafts(id),
+    seq        INTEGER NOT NULL,
+    role       TEXT NOT NULL CHECK (role IN ('player', 'copilot')),
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (draft_id, seq)
+  );
+
+  -- The approved design contract of a game. Inserted once; there is no update path.
+  CREATE TABLE world_seeds (
+    game_id    TEXT PRIMARY KEY REFERENCES games(id),
+    draft_id   TEXT REFERENCES world_drafts(id),
+    pack_id    TEXT NOT NULL,
+    seed_json  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TRIGGER world_seeds_immutable BEFORE UPDATE ON world_seeds
+    BEGIN SELECT RAISE(ABORT, 'world seeds are immutable'); END;
+  `,
 ];

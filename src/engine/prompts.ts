@@ -1,12 +1,19 @@
 import type { Character } from '../domain/types.ts';
 import type { GamePack } from '../packs/types.ts';
+
+/** Per-game setting, from the WorldSeed. */
+export interface WorldContext {
+  line: string; // e.g. "Milan, September 2026; tone: grounded; realism: brutal"
+  rules: string[];
+  homes: string; // where new people plausibly live
+}
 import { formatGameTime } from './util.ts';
 
 // System prompts are static per task; everything situational goes in the user prompt,
 // which is built by the Context Builder and stored verbatim in the turn trace.
 
-export function interpretSystemPrompt(playerName: string, pack: GamePack): string {
-  return `You interpret one player input in a realistic, persistent living world set in ${pack.setting.world}.
+export function interpretSystemPrompt(playerName: string, pack: GamePack, world: WorldContext): string {
+  return `You interpret one player input in a persistent living world: ${world.line}.${world.rules.length ? `\nWorld rules: ${world.rules.join('; ')}.` : ''}
 The player controls ${playerName}. You do NOT play any other character: never write another person's words, reactions or whether they answer.
 
 Split the input into what is observable and what is private:
@@ -87,13 +94,13 @@ OUTPUT (JSON)
   Offers are never decided through changes — only through YOUR DECISION. Return JSON only.`;
 }
 
-export function generateSystemPrompt(pack: GamePack): string {
-  return `You create a new fictional person for a realistic living world set in ${pack.setting.world}.
+export function generateSystemPrompt(world: WorldContext): string {
+  return `You create a new fictional person for a persistent living world: ${world.line}.
 The person must be an ordinary, plausible individual — not a caricature, not a real public figure, not suspiciously convenient for the player.
 Use exactly the requested first name (add a plausible surname). Fit the stated relationship to the player.
 Do NOT invent specific shared scenes or episodes with the player, secrets about the player, or anything about the player beyond the public profile given.
 relationshipToPlayer: how THIS person sees the player, in general terms from their own point of view (how they know each other, how close they are, what they think of them). No specific episodes.
-location: where they live (${pack.setting.homes}). Return JSON only.`;
+location: where they live (${world.homes}). Return JSON only.`;
 }
 
 export function generateUserPrompt(args: { name: string; relationHint: string | null; player: Character; gameTime: string; existingNames: string[]; world: string }): string {

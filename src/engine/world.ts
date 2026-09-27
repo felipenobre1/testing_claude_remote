@@ -27,6 +27,8 @@ export interface WorldTurnDeps {
   rng: RngFactory;
   seedBase: string; // game + request: a retried request replays the same world
   director: null | ((system: string, user: string) => Promise<DirectorProposal>);
+  /** The game's WorldSeed design contract — given to the Director on every review so it never drifts. */
+  bible: string;
 }
 
 export interface WorldTurnTrace {
@@ -196,15 +198,19 @@ function resolveThread(p: WorldPlanner, t: StoryThread, at: string, deps: WorldT
 // Story Director: proposes situations that grow out of world truth. The engine validates.
 // ---------------------------------------------------------------------------
 
-export function directorSystemPrompt(packContext: string): string {
+export function directorSystemPrompt(packContext: string, bible: string): string {
   return `You are the Story Director of a persistent, living world. You do NOT write a plot, chapters or quests, and you never steer the player.
 You look at what has actually happened and ask: what situations are naturally developing from this?
-World background: ${packContext}
+THE WORLD BIBLE (approved by the player at creation; binding for the whole game, however much history changes):
+${bible}
+
+Background on this kind of world: ${packContext}
 
 Propose at most two NEW situations (story threads) and any ESCALATIONS of existing ones, only when real events support them.
 - Every thread must cite causeEventIds from the EVENTS list and be driven by the people's own goals, pressures and circumstances.
 - A thread is decided eventually by one actor (never the player): say what they are weighing, which factors matter (−2…+2 from their point of view), and what happens either way.
 - messageToPlayer: only if that person would plausibly tell the player; otherwise null (the player may never find out).
+- Respect the bible: its tone, realism, player significance and design principles hold even if the player later becomes powerful.
 - Most of the time the right answer is no new thread. Prefer quiet realism over drama. Return JSON only.`;
 }
 
@@ -271,7 +277,7 @@ export function applyDirectorProposal(p: WorldPlanner, store: Store, proposal: D
 }
 
 async function runDirector(p: WorldPlanner, deps: WorldTurnDeps, at: string) {
-  const proposal = await deps.director!(directorSystemPrompt(p.ctx.pack.prompts.director), directorUserPrompt(p, deps.store, at));
+  const proposal = await deps.director!(directorSystemPrompt(p.ctx.pack.prompts.director, deps.bible), directorUserPrompt(p, deps.store, at));
   const { accepted, rejected } = applyDirectorProposal(p, deps.store, proposal, at);
   return { ran: true, proposal, accepted, rejected };
 }

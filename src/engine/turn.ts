@@ -14,7 +14,7 @@ import {
 } from './context.ts';
 import {
   appraiseSystemPrompt, appraiseUserPrompt, decisionStateSystemPrompt, decisionStateUserPrompt, generateSystemPrompt, generateUserPrompt,
-  interpretSystemPrompt, npcSystemPrompt,
+  interpretSystemPrompt, npcSystemPrompt, type WorldContext,
 } from './prompts.ts';
 import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
@@ -24,6 +24,8 @@ import { applyOps, npcThreadsBriefing, npcWorldBriefing, playerWorldBriefing, Wo
 import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
+import { bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
+import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
 export interface TurnRequest {
@@ -88,8 +90,31 @@ export class Engine {
     store.migratePack(this.pack.id, this.pack.migrations);
   }
 
+  /**
+   * Quick start: create a game straight from the pack's template world (no Copilot conversation).
+   * Uses the same compile → seed → create pipeline as a finalized World Creation draft.
+   */
   newGame(opts: { playerName?: string } = {}) {
-    return this.pack.newGame(this.store, { ...opts, now: this.now() });
+    const t = this.pack.worldCreation.template;
+    const draft = opts.playerName ? { ...t, player: { ...t.player, name: opts.playerName } } : t;
+    const { seed, problems } = compileDraft(draft, [this.pack], { now: this.now() });
+    if (!seed) throw new Error(`the pack template does not compile: ${problems.join('; ')}`);
+    return createGameFromSeed(this.store, this.pack, seed, this.now());
+  }
+
+  /** The game's setting and design contract, from its immutable WorldSeed. */
+  private worldOf(gameId: string): { ctx: WorldContext; bible: string; seed: WorldSeed; pack: GamePack } {
+    let seed = this.store.getWorldSeed<WorldSeed>(gameId);
+    if (!seed) {
+      // Saves from before World Creation: fall back to the pack's template world (not persisted).
+      seed = compileDraft(this.pack.worldCreation.template, [this.pack], { gameId, now: this.now() }).seed!;
+    }
+    // A world may set its own currency at creation; the pack's is the default.
+    const pack = seed.player.currency ? { ...this.pack, currency: seed.player.currency } : this.pack;
+    return {
+      seed, bible: bibleText(seed), pack,
+      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}` },
+    };
   }
 
   async takeTurn(req: TurnRequest): Promise<TurnResponse> {
@@ -127,6 +152,7 @@ export class Engine {
   private async run(input: string, game: Game, trace: Trace): Promise<TurnResponse> {
     const store = this.store;
     const now = this.now();
+    const world = this.worldOf(game.id);
     const pp = retrievePlayerPerspective(store, game.id);
     const player = pp.player;
     trace.scene = pp.scene;
@@ -135,14 +161,14 @@ export class Engine {
     const nameOf = (id: string) => everyone.find((c) => c.id === id)?.name ?? id;
     // The world planner simulates resource/offer/promise/thread changes on a copy of canonical state.
     const econCtx: PlanContext = {
-      store, pack: this.pack, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
+      store, pack: world.pack, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
       player, characters: everyone, interaction: null,
     };
     const economy = new WorldPlanner(econCtx);
 
     // 1. Interpret raw input from the player's perspective.
-    const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name, this.pack),
-      renderPlayerBriefing(pp, input, playerWorldBriefing(economy, game.gameTime), this.pack.setting.world),
+    const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name, world.pack, world.ctx),
+      renderPlayerBriefing(pp, input, playerWorldBriefing(economy, game.gameTime), world.ctx.line),
       'interpretation', this.interpretSchema, this.interpretSchema as unknown as z.ZodType<InterpretResult>);
     trace.interpretation = interp;
     // Self-harm is never simulated: step out of the fiction, change nothing.
@@ -302,7 +328,7 @@ export class Engine {
       const econView = npcWorldBriefing(economy, target.id, t1);
       ctxInput.economy = econView.text;
       ctxInput.situations = npcThreadsBriefing(economy, target.id);
-      ctxInput.world = this.pack.setting.world;
+      ctxInput.world = world.ctx.line;
       const perspective = retrieveNpcPerspective(store, ctxInput);
       trace.retrieval = { ...perspectiveTrace(perspective), economyIds: econView.ids };
 
@@ -321,7 +347,7 @@ export class Engine {
 
       trace.validation = [];
       let counterTerms: Record<string, number> | null = null;
-      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, this.pack.setting.world), renderNpcBriefing(perspective, ctxInput),
+      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
           const p = validatePortrayal(out, decision);
@@ -367,7 +393,7 @@ export class Engine {
 
     // 6. The world turn: time passes for everyone, not just the player.
     trace.world = await runWorldTurn(economy, t0, plan.newGameTime, {
-      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`,
+      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`, bible: world.bible,
       director: this.directorEnabled
         ? (system, user) => this.callStructured<DirectorProposal>(trace, 'director', system, user, 'director', DirectorProposalSchema, DirectorProposalSchema)
         : null,
@@ -544,8 +570,8 @@ export class Engine {
       const rel = perspective.relationships.find((r) => r.relationship.toCharacterId === player.id)?.relationship.summary ?? '';
       const kind = this.pack.offerKinds.find((k) => k.kind === offer.kind);
       const termKeys = kind?.terms.map((t) => `${t.key} (${t.description})`).join(', ') ?? Object.keys(offer.terms).join(', ');
-      const proposal = await this.callStructured<DecisionStateProposal>(trace, 'decision_state', decisionStateSystemPrompt(this.pack.setting.world, termKeys),
-        decisionStateUserPrompt(npc, rel, `${kind?.summary ?? offer.kind}: ${offerText}`, gameTime, this.pack.setting.world), 'decision_state',
+      const proposal = await this.callStructured<DecisionStateProposal>(trace, 'decision_state', decisionStateSystemPrompt(this.worldOf(game.id).ctx.line, termKeys),
+        decisionStateUserPrompt(npc, rel, `${kind?.summary ?? offer.kind}: ${offerText}`, gameTime, this.worldOf(game.id).ctx.line), 'decision_state',
         DecisionStateProposalSchema, DecisionStateProposalSchema, (p) => decisionStateProblems(p));
       state = {
         ...proposal,
@@ -577,8 +603,8 @@ export class Engine {
   }
 
   private async generateCharacter(trace: Trace, game: Game, player: Character, everyone: Character[], name: string, relationHint: string | null): Promise<PendingCharacter> {
-    const user = generateUserPrompt({ name, relationHint, player, gameTime: game.gameTime, existingNames: everyone.filter((c) => !c.isPlayer).map((c) => c.name), world: this.pack.setting.world });
-    const p = await this.callStructured(trace, 'generate_character', generateSystemPrompt(this.pack), user, 'character',
+    const user = generateUserPrompt({ name, relationHint, player, gameTime: game.gameTime, existingNames: everyone.filter((c) => !c.isPlayer).map((c) => c.name), world: this.worldOf(game.id).ctx.line });
+    const p = await this.callStructured(trace, 'generate_character', generateSystemPrompt(this.worldOf(game.id).ctx), user, 'character',
       CharacterProposalSchema, CharacterProposalSchema, (proposal) => validateCharacterProposal(proposal, name, everyone));
     const now = this.now();
     const character: Character = {

@@ -16,6 +16,9 @@ import { HttpPageFetcher } from '../src/engine/web.ts';
 import { companyRepo } from '../src/packs/startup/company.ts';
 import { startupPack } from '../src/packs/startup/index.ts';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/provider.ts';
+import { WorldCreation } from '../src/engine/creation.ts';
+import type { WorldSeed } from '../src/domain/world.ts';
+import { PACKS } from '../src/packs/index.ts';
 
 if (!process.env.OPENAI_API_KEY) {
   console.log('SKIP live smoke test: OPENAI_API_KEY is not set.');
@@ -172,6 +175,40 @@ check(behavioural, 'A week of work moved the clock by days', (st.getGame(gameId)
 const failed = [...s1.turns, ...s2.turns, ...s3.turns].filter((t) => t.status !== 'committed' && t.status !== 'clarification');
 check(structural, 'Every turn committed', failed.length === 0, failed.map((t) => `#${t.seq}: ${t.error}`).join(' | '));
 st.close();
+
+// ---------------- session 4: World Creation Copilot (Open World pack, a world no pack hard-codes) ----------------
+{
+  const cs = new Store(dbPath);
+  const llm = new Recording(new OpenAIProvider());
+  const creation = new WorldCreation(cs, llm, { packs: PACKS });
+  const { draftId, text } = creation.start();
+  transcript.push('## Session 4 (World Creation Copilot)', `COPILOT: ${text}`);
+  const gamesBefore = cs.listGames().length;
+  const say = async (input: string) => {
+    const r = await creation.say(draftId, input);
+    transcript.push(`> ${input}`, `COPILOT [${r.status}]: ${r.text}`);
+    return r;
+  };
+  try {
+    await say("Something like Dune. I'm a nobody, and my father rules the planet.");
+    check(behavioural, 'Copilot flagged the nobody/ruler contradiction', creation.draft(draftId).contradictions.length > 0, creation.draft(draftId).contradictions.join(' | '));
+    await say("Fair — make my father a disgraced water-seller instead. I'm 17, alternate history from the start. You decide everything else.");
+    await say("Let's start.");
+    check(structural, 'No canonical game before approval', cs.listGames().length === gamesBefore);
+    let r = await say('Yes, create it.');
+    if (r.status === 'awaiting_approval' || r.status === 'drafting') r = await say('Yes, I approve. Create it.');
+    check(behavioural, 'World created after explicit approval', r.status === 'finalized', r.status);
+    if (r.gameId) {
+      const seed = cs.getWorldSeed<WorldSeed>(r.gameId);
+      check(structural, 'Exactly one WorldSeed stored for the new game', Boolean(seed) && seed!.draftId === draftId);
+      check(behavioural, 'Seed keeps the player insignificant', !/ruler|heir|chosen/i.test(seed?.style.playerSignificance ?? ''), seed?.style.playerSignificance);
+      transcript.push(`OPENING:\n${r.opening}`);
+    }
+  } catch (e) {
+    check(structural, 'World Creation Copilot ran without errors', false, (e as Error).message);
+  }
+  cs.close();
+}
 
 // ---------------- report ----------------
 const fmt = (xs: typeof structural) => xs.map((c) => `- ${c.ok ? '✅' : '❌'} ${c.name}${c.detail ? `\n  - ${c.detail.replace(/\n/g, ' ')}` : ''}`).join('\n');

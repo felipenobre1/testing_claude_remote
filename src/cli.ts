@@ -5,19 +5,27 @@ import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFa
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
-import { startupPack } from './packs/startup/index.ts';
+import { WorldCreation, type CreationResult } from './engine/creation.ts';
+import type { LLMProvider } from './llm/provider.ts';
+import { PACKS, packById } from './packs/index.ts';
+import type { GamePack } from './packs/types.ts';
 
-const USAGE = `Startup — Milestone 1
+const USAGE = `Living Story Engine
 
-  npm start -- new [--name Felipe]          start a new game and play
+  npm start -- new                          design a new world with the World Creation Copilot, then play
+                                            (resumes your unfinished world draft if there is one; --fresh starts over)
+  npm start -- new --quick [--pack startup] [--name Felipe]
+                                            skip the conversation: start the pack's example world
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
+  npm start -- drafts                       list world drafts
   npm start -- inspect <what> [--game id]   inspect state without playing:
       turns | turn <n|last> [--full] | character <name> | context <name> | events | facts
 
 Options: --db <path> (default data/startup.db or $STARTUP_DB), --debug (print the trace after each turn)
 Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
+While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
 In game: type what you do. Commands: /status  /debug  /inspect <what>  /quit`;
 
 function parseArgs(argv: string[]) {
@@ -28,7 +36,7 @@ function parseArgs(argv: string[]) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (['db', 'game', 'name'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
+      if (['db', 'game', 'name', 'pack'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
     } else positional.push(a);
   }
   return { flags, positional };
@@ -50,15 +58,50 @@ function inspect(store: Store, gameId: string, args: string[], full: boolean): s
   }
 }
 
-function liveEngine(store: Store): Engine | null {
+function liveLLM(): LLMProvider | null {
   try {
-    const fetcher = process.env.STARTUP_FETCH === 'off' ? null : new HttpPageFetcher();
-    // The Story Director runs during world turns (at most one model call per game day). STARTUP_DIRECTOR=off disables it.
-    return new Engine(store, new OpenAIProvider(), { pack: startupPack, fetcher, director: process.env.STARTUP_DIRECTOR !== 'off' });
+    return new OpenAIProvider();
   } catch (e) {
     console.error(`Cannot start live play: ${(e as Error).message}`);
     process.exitCode = 1;
     return null;
+  }
+}
+
+function liveEngine(store: Store, pack: GamePack, llm: LLMProvider): Engine {
+  const fetcher = process.env.STARTUP_FETCH === 'off' ? null : new HttpPageFetcher();
+  // The Story Director runs during world turns (at most one model call per game day). STARTUP_DIRECTOR=off disables it.
+  return new Engine(store, llm, { pack, fetcher, director: process.env.STARTUP_DIRECTOR !== 'off' });
+}
+
+/** The World Creation conversation. Returns the created game, or null if the player left or abandoned. */
+async function design(creation: WorldCreation, draftId: string, intro: string): Promise<CreationResult | null> {
+  console.log(`\n${intro}\n\n(/draft shows what's decided · /quit saves the draft for later)\n`);
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    for (;;) {
+      const line = (await rl.question('world> ')).trim();
+      if (!line) continue;
+      let r: CreationResult;
+      if (line === '/quit' || line === '/exit') { console.log('Draft saved. Resume it with: npm start -- new'); return null; }
+      if (line === '/draft') { console.log(`\n${creation.view(draftId)}\n`); continue; }
+      if (line === '/finalize') r = creation.requestFinalize(draftId);
+      else if (line === '/approve') r = creation.approve(draftId);
+      else if (line === '/abandon') r = creation.abandon(draftId);
+      else {
+        process.stdout.write('…\r');
+        try {
+          r = await creation.say(draftId, line);
+        } catch (e) {
+          console.log(`(the Copilot failed: ${(e as Error).message} — your draft is unchanged; try again)\n`);
+          continue;
+        }
+      }
+      console.log(`\n${r.text}\n`);
+      if (r.status === 'finalized' || r.status === 'abandoned') return r.status === 'finalized' ? r : null;
+    }
+  } finally {
+    rl.close();
   }
 }
 
@@ -99,19 +142,43 @@ async function main() {
   try {
     const latest = () => store.listGames()[0]?.id;
     if (cmd === 'new') {
-      const engine = liveEngine(store);
-      if (!engine) return;
-      const { game, opening } = engine.newGame({ playerName: (flags.name as string) ?? 'Felipe' });
-      await play(engine, game.id, Boolean(flags.debug), opening);
+      const llm = liveLLM();
+      if (!llm) return;
+      if (flags.quick) {
+        const pack = packById((flags.pack as string) ?? 'startup');
+        if (!pack) return console.error(`Unknown pack. Available: ${PACKS.map((p) => p.id).join(', ')}`);
+        const engine = liveEngine(store, pack, llm);
+        const { game, opening } = engine.newGame({ playerName: flags.name as string | undefined });
+        return await play(engine, game.id, Boolean(flags.debug), opening);
+      }
+      const creation = new WorldCreation(store, llm, { packs: PACKS });
+      const open = flags.fresh ? undefined : creation.latestOpen();
+      let draftId: string, intro: string;
+      if (open) {
+        draftId = open.id;
+        const last = creation.messages(draftId).at(-1);
+        intro = `Resuming your world draft (npm start -- new --fresh starts a new one).\n\nSo far:\n${creation.view(draftId)}${last?.role === 'copilot' ? `\n\n${last.text}` : ''}`;
+      } else {
+        ({ draftId, text: intro } = creation.start());
+      }
+      const created = await design(creation, draftId, intro);
+      if (!created?.gameId) return;
+      const game = store.getGame(created.gameId)!;
+      await play(liveEngine(store, packById(game.packId)!, llm), game.id, Boolean(flags.debug), created.opening!);
     } else if (cmd === 'continue') {
       const gameId = rest[0] ?? latest();
       if (!gameId || !store.getGame(gameId)) return console.error('No game to continue. Start one with: npm start -- new');
-      const engine = liveEngine(store);
-      if (!engine) return;
+      const pack = packById(store.getGame(gameId)!.packId);
+      if (!pack) return console.error(`This game needs the "${store.getGame(gameId)!.packId}" pack, which this app does not have.`);
+      const llm = liveLLM();
+      if (!llm) return;
+      const engine = liveEngine(store, pack, llm);
       const last = store.listTurns(gameId).filter((t) => t.status === 'committed').at(-1);
       await play(engine, gameId, Boolean(flags.debug), `${formatStatus(store, gameId)}${last?.response ? `\n\nLast time:\n${last.response.text}` : ''}`);
     } else if (cmd === 'games') {
-      console.log(store.listGames().map((g) => `${g.id}  ${g.title}  ${g.gameTime}  rev ${g.revision}`).join('\n') || '(no games)');
+      console.log(store.listGames().map((g) => `${g.id}  [${g.packId}]  ${g.title}  ${g.gameTime}  rev ${g.revision}`).join('\n') || '(no games)');
+    } else if (cmd === 'drafts') {
+      console.log(store.listDrafts().map((d) => `${d.id}  ${d.status}  v${d.version}  ${d.updatedAt}${d.gameId ? `  → ${d.gameId}` : ''}`).join('\n') || '(no drafts)');
     } else if (cmd === 'inspect') {
       const gameId = (flags.game as string) ?? latest();
       if (!gameId) return console.error('No games in this database.');

@@ -34,6 +34,7 @@ export interface Game {
   timezone: string;
   gameTime: string;
   playerCharacterId: string;
+  packId: string;
   revision: number;
   createdAt: string;
   updatedAt: string;

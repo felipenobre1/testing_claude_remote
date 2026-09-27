@@ -101,8 +101,8 @@ export class Store {
   // ---------- games ----------
   insertGame(g: Game): void {
     this.run(
-      `INSERT INTO games (id, title, timezone, game_time, player_character_id, revision, created_at, updated_at)
-       VALUES (:id, :title, :timezone, :gameTime, :playerCharacterId, :revision, :createdAt, :updatedAt)`,
+      `INSERT INTO games (id, title, timezone, game_time, player_character_id, pack_id, revision, created_at, updated_at)
+       VALUES (:id, :title, :timezone, :gameTime, :playerCharacterId, :packId, :revision, :createdAt, :updatedAt)`,
       { ...g },
     );
   }
@@ -501,6 +501,39 @@ export class Store {
     this.run('UPDATE recurring_payments SET next_due_game_time = :nextDueGameTime, active = :active WHERE id = :id', { ...r, active: r.active ? 1 : 0 });
   }
 
+  // ---------- world creation ----------
+  insertDraft(d: { id: string; status: string; draft: unknown; version: number; now: string }): void {
+    this.run(`INSERT INTO world_drafts (id, status, draft_json, version, summary_version, game_id, created_at, updated_at)
+      VALUES (:id, :status, :draft, :version, NULL, NULL, :now, :now)`, { id: d.id, status: d.status, draft: json(d.draft), version: d.version, now: d.now });
+  }
+  updateDraft(d: { id: string; status: string; draft: unknown; version: number; summaryVersion: number | null; gameId: string | null; now: string }): void {
+    this.run(`UPDATE world_drafts SET status = :status, draft_json = :draft, version = :version, summary_version = :summaryVersion, game_id = :gameId,
+      updated_at = :now WHERE id = :id`, { ...d, draft: json(d.draft) });
+  }
+  getDraft(id: string): DraftRow | undefined {
+    const r = this.get('SELECT * FROM world_drafts WHERE id = :id', { id });
+    return r && mapDraft(r);
+  }
+  listDrafts(): DraftRow[] {
+    return this.all('SELECT * FROM world_drafts ORDER BY updated_at DESC, rowid DESC').map(mapDraft);
+  }
+  addDraftMessage(draftId: string, role: 'player' | 'copilot', text: string, now: string): void {
+    const seq = (this.get('SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM draft_messages WHERE draft_id = :d', { d: draftId }) as Row).s;
+    this.run('INSERT INTO draft_messages (id, draft_id, seq, role, text, created_at) VALUES (:id, :d, :seq, :role, :text, :now)',
+      { id: `${draftId}:${seq}`, d: draftId, seq, role, text, now });
+  }
+  listDraftMessages(draftId: string): { role: 'player' | 'copilot'; text: string }[] {
+    return this.all('SELECT role, text FROM draft_messages WHERE draft_id = :d ORDER BY seq', { d: draftId }).map((r) => ({ role: r.role, text: r.text }));
+  }
+  insertWorldSeed(gameId: string, draftId: string | null, packId: string, seed: unknown, now: string): void {
+    this.run('INSERT INTO world_seeds (game_id, draft_id, pack_id, seed_json, created_at) VALUES (:g, :d, :p, :s, :now)',
+      { g: gameId, d: draftId, p: packId, s: json(seed), now });
+  }
+  getWorldSeed<T = unknown>(gameId: string): T | undefined {
+    const r = this.get('SELECT seed_json FROM world_seeds WHERE game_id = :g', { g: gameId });
+    return r ? (JSON.parse(r.seed_json) as T) : undefined;
+  }
+
   // ---------- turns ----------
   getFinalTurnByRequest(gameId: string, requestId: string): TurnRow | undefined {
     const r = this.get(
@@ -554,7 +587,7 @@ function bind(sql: string, p: Record<string, unknown>): Params {
 // ---------- row mappers ----------
 function mapGame(r: Row): Game {
   return {
-    id: r.id, title: r.title, timezone: r.timezone, gameTime: r.game_time, playerCharacterId: r.player_character_id,
+    id: r.id, title: r.title, timezone: r.timezone, gameTime: r.game_time, playerCharacterId: r.player_character_id, packId: r.pack_id,
     revision: r.revision, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -658,6 +691,19 @@ function mapScheduled(r: Row): ScheduledItem {
     id: r.id, gameId: r.game_id, dueGameTime: r.due_game_time, kind: r.kind, payload: parse(r.payload_json), threadId: r.thread_id,
     status: r.status, createdGameTime: r.created_game_time, createdAt: r.created_at,
   };
+}
+export interface DraftRow {
+  id: string;
+  status: 'drafting' | 'awaiting_approval' | 'finalized' | 'abandoned';
+  draft: unknown;
+  version: number;
+  summaryVersion: number | null;
+  gameId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+function mapDraft(r: Row): DraftRow {
+  return { id: r.id, status: r.status, draft: parse(r.draft_json), version: r.version, summaryVersion: r.summary_version, gameId: r.game_id, createdAt: r.created_at, updatedAt: r.updated_at };
 }
 function mapTurn(r: Row): TurnRow {
   return {

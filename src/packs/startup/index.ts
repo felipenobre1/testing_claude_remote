@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type { Offer } from '../../domain/types.ts';
-import { seedWorld } from '../../engine/newGame.ts';
+import { EMPTY_DRAFT } from '../../domain/world.ts';
 import type { WorldPlanner } from '../../engine/planner.ts';
-import { formatGameTime, newId } from '../../engine/util.ts';
+import { newId } from '../../engine/util.ts';
 import type { GamePack, OfferKindDef, PackAction } from '../types.ts';
 import { companyRepo, pct, PRODUCT_STAGES, STARTUP_MIGRATIONS, StartupState, type Company, type ProductStage } from './company.ts';
 
@@ -14,7 +14,6 @@ import { companyRepo, pct, PRODUCT_STAGES, STARTUP_MIGRATIONS, StartupState, typ
 // ============================================================================
 
 export const START_TIME = '2026-09-27T09:14'; // Sunday, Europe/Rome
-export const STARTING_CASH_CENTS = 250_000;
 
 const st = (api: WorldPlanner) => api.packState as StartupState;
 const cents = (x: number) => Math.round(x * 100);
@@ -179,33 +178,42 @@ export const startupPack: GamePack = {
   id: 'startup',
   name: 'Startup — Milan',
   currency: { code: 'EUR', symbol: '€' },
-  setting: { world: 'the real Milan, 2026', homes: 'a real Milan neighbourhood or nearby town', timezone: 'Europe/Rome' },
   migrations: STARTUP_MIGRATIONS,
-  newGame(store, opts) {
-    const { game, player } = seedWorld(store, {
-      title: `Startup — Milan (${opts.playerName ?? 'Felipe'})`,
-      timezone: 'Europe/Rome',
-      startTime: START_TIME,
-      player: {
-        name: opts.playerName ?? 'Felipe', age: 18, gender: null, role: 'player',
-        occupation: 'Recent liceo graduate, not enrolled anywhere yet',
+  worldCreation: {
+    summary: 'a realistic present-day life where the player tries to build a company: money, co-founders, hiring, equity, investors and customers',
+    guidance: [
+      'Startup mechanics: companies with cap tables, joining/hiring/buying/investing offers, a money ledger, recurring costs and promises.',
+      'Good fit for grounded, real-world settings (any real city, any recent year). Ask about: where, when, the player\'s age, money, skills,',
+      'living situation and whether they already have an idea or a company. Starting money matters a lot here — make it explicit.',
+      'Default world: the real world, history continues unless the story changes it; NPCs are busy, sceptical and have their own lives.',
+    ].join('\n'),
+    template: {
+      ...EMPTY_DRAFT,
+      packId: 'startup',
+      premise: 'An eighteen-year-old in Milan wants to build a startup, with €2,500, a laptop and no idea yet.',
+      sourceWorld: 'the real world',
+      canonPolicy: 'history_continues_unless_changed',
+      setting: { place: 'Milan', era: '2026, the present day', startDate: START_TIME, timezone: 'Europe/Rome',
+        description: 'The real Milan in September 2026: universities starting, a small but active startup scene, expensive rents.' },
+      style: { tone: 'grounded, realistic, sometimes funny', realism: 'high — real prices, real institutions, busy people who owe the player nothing',
+        difficulty: 'hard; most attempts fail', narrativeStyle: 'second person, concise', playerSignificance: 'a nobody: no network, no money, no reputation yet' },
+      designPrinciples: [
+        'Do not manufacture destiny around the player; success must be earned.',
+        'People have their own lives and priorities; rejection and silence are normal.',
+        'Money, time and trust are scarce and tracked.',
+      ],
+      worldRules: ['The real world of 2026: real laws, real companies, real technology — nothing magical.'],
+      player: { ...EMPTY_DRAFT.player,
+        name: 'Felipe', age: 18, occupation: 'Recent liceo graduate, not enrolled anywhere yet',
         background: 'Born and raised in Milan. Just finished liceo scientifico. Still lives at home with parents. '
           + 'Self-taught programmer who has built small web apps and scripts. No company yet and little business experience.',
-        personality: 'Shaped by the player through play.', traits: ['technical', 'ambitious'], values: [], goals: ['Build a startup'], fears: [],
-        location: 'Milan (family apartment)',
-      },
-      facts: [{ predicate: 'housing', value: 'lives with parents' }],
-      startingCashCents: STARTING_CASH_CENTS,
-      scene: { location: 'Home — bedroom in the family apartment, Milan', description: 'Sunday morning. Laptop open on the desk, phone beside it.' },
-    }, opts.now);
-    const opening = [
-      `Milan — ${formatGameTime(game.gameTime)}`, '',
-      "You're eighteen and still living with your parents.",
-      "You've got €2,500 in your bank account, a laptop, and enough programming experience to build things yourself.",
-      "For months you've been thinking about starting a company. You don't have an idea yet.",
-      'No investors. No employees. No customers.', 'Your phone is beside you.', '', 'What do you do?',
-    ].join('\n');
-    return { game, player, opening };
+        skills: ['technical', 'ambitious'], goals: ['Build a startup'], location: 'Milan (family apartment)',
+        circumstances: ['lives with parents'], startingMoney: 2_500, currency: { code: 'EUR', symbol: '€' }, possessions: ['a laptop', 'a phone'] },
+      currentSituation: "You're eighteen and still living with your parents. You've got €2,500 in your bank account, a laptop, and enough programming "
+        + "experience to build things yourself. For months you've been thinking about starting a company. You don't have an idea yet. "
+        + 'No investors. No employees. No customers.',
+      startingScene: { location: 'Home — bedroom in the family apartment, Milan', description: 'Sunday morning. Laptop open on the desk, phone beside it.' },
+    },
   },
   offerKinds,
   entities: {

@@ -1,7 +1,8 @@
 import type { z } from 'zod';
 import type { Store } from '../db/store.ts';
 import type { Migration } from '../db/migrations.ts';
-import type { Character, Game, Offer } from '../domain/types.ts';
+import type { Offer } from '../domain/types.ts';
+import type { WorldDraft } from '../domain/world.ts';
 import type { WorldPlanner } from '../engine/planner.ts';
 
 // ============================================================================
@@ -43,16 +44,18 @@ export interface PackAction {
 export interface GamePack {
   id: string;
   name: string;
+  /** Default currency (a world may set its own at creation). */
   currency: { code: string; symbol: string };
-  setting: {
-    /** One line used in every prompt, e.g. "the real Milan, 2026". */
-    world: string;
-    /** Where new characters live by default, e.g. "a real Milan neighbourhood or nearby town". */
-    homes: string;
-    timezone: string;
-  };
   migrations: Migration[];
-  newGame(store: Store, opts: { playerName?: string; now: string }): { game: Game; player: Character; opening: string };
+  /** Guidance for the World Creation Copilot. The world itself is designed with the player and lives in the WorldSeed. */
+  worldCreation: {
+    /** What this pack simulates, in one line (shown when choosing a pack). */
+    summary: string;
+    /** What matters when setting up a world for this pack, and what can safely wait. */
+    guidance: string;
+    /** A complete example draft (also used for quick start). */
+    template: WorldDraft;
+  };
   offerKinds: OfferKindDef[];
   /** Pack-defined owners of resources (companies, guilds, houses): lookup by name and control. */
   entities: {

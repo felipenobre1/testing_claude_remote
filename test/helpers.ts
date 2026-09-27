@@ -5,6 +5,7 @@ import { Store } from '../src/db/store.ts';
 import type { CharacterProposal, DecisionState, InterpretResult } from '../src/domain/schemas.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
+import type { LLMTask } from '../src/llm/provider.ts';
 import { startupPack } from '../src/packs/startup/index.ts';
 
 export function tmpDbPath(): string {
@@ -86,7 +87,7 @@ export function counts(store: Store, gameId: string) {
   );
 }
 
-export const lastPrompt = (llm: ScriptedProvider, task: 'interpret' | 'generate_character' | 'npc_turn') =>
+export const lastPrompt = (llm: ScriptedProvider, task: LLMTask) =>
   llm.callsFor(task).at(-1)!.user;
 
 /** A fixed roll: 0.5 ⇒ +0, 1 ⇒ +10, 0 ⇒ −10. */

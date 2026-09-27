@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Store } from '../../src/db/store.ts';
 import type { DecisionState } from '../../src/domain/schemas.ts';
-import { seedWorld } from '../../src/engine/newGame.ts';
+import { EMPTY_DRAFT } from '../../src/domain/world.ts';
 import { Engine } from '../../src/engine/turn.ts';
 import { ScriptedProvider } from '../../src/llm/scripted.ts';
 import type { GamePack } from '../../src/packs/types.ts';
@@ -15,16 +15,20 @@ const keep: GamePack = {
   id: 'border-keep',
   name: 'The Border Keep (test pack)',
   currency: { code: 'GOLD', symbol: '₲' },
-  setting: { world: 'a mountain border keep in the year 1204', homes: 'the keep or the valley villages', timezone: 'UTC' },
   migrations: [],
-  newGame(store, opts) {
-    const { game, player } = seedWorld(store, {
-      title: 'The Border Keep', timezone: 'UTC', startTime: '1204-10-01T07:00',
-      player: { name: opts.playerName ?? 'Edric', age: 24, gender: null, role: 'player', occupation: 'caravan master', background: 'Leads a small caravan of wool traders.',
-        personality: 'Shaped by the player.', traits: ['stubborn'], values: [], goals: ['cross the pass before winter'], fears: [], location: 'the valley road' },
-      facts: [], startingCashCents: 20_000, scene: { location: 'The gate of the border keep', description: 'Guards watch the caravan from the wall.' },
-    }, opts.now);
-    return { game, player, opening: 'The gate is shut. What do you do?' };
+  worldCreation: {
+    summary: 'a medieval border march where trade, tolls and loyalty decide who crosses the pass',
+    guidance: 'Test pack.',
+    template: {
+      ...EMPTY_DRAFT, packId: 'border-keep', premise: 'A caravan master must cross a guarded mountain pass before winter.',
+      sourceWorld: null, canonPolicy: 'original_world',
+      setting: { place: 'a mountain border keep', era: 'the year 1204', startDate: '1204-10-01T07:00', timezone: 'UTC', description: null },
+      style: { tone: 'austere', realism: 'harsh', difficulty: null, narrativeStyle: null, playerSignificance: 'a merchant among many' },
+      player: { ...EMPTY_DRAFT.player, name: 'Edric', age: 24, occupation: 'caravan master', background: 'Leads a small caravan of wool traders.',
+        skills: ['stubborn'], goals: ['cross the pass before winter'], location: 'the valley road', startingMoney: 200 },
+      currentSituation: 'The gate is shut.',
+      startingScene: { location: 'The gate of the border keep', description: 'Guards watch the caravan from the wall.' },
+    },
   },
   offerKinds: [{
     kind: 'grant_passage',
@@ -68,7 +72,7 @@ test('a different pack: same engine, same decision engine, different world', asy
   llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Aldric', relationHint: 'lord of the keep' }, channel: 'in_person', spokenText: 'My lord, we ask passage.' }))
     .enqueue('generate_character', LORD).enqueue('npc_turn', npc({ dialogue: 'State your business.' }));
   await engine.takeTurn({ gameId: game.id, input: 'I ask the lord for passage' });
-  assert.match(llm.callsFor('generate_character')[0]!.system, /a mountain border keep in the year 1204/);
+  assert.match(llm.callsFor('generate_character')[0]!.system, /a mountain border keep, the year 1204/);
   const lord = store.listCharacters(game.id).find((c) => c.name === 'Aldric Voss')!;
   store.upsertDecisionState(game.id, lord.id, 'grant_passage', LORD_STATE, 'seed', new Date().toISOString());
 
