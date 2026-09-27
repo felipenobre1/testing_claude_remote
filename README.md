@@ -19,7 +19,7 @@ npm test                      # deterministic suite (ScriptedProvider, no networ
 npm run typecheck
 
 export OPENAI_API_KEY=sk-...  # live play / smoke test only
-export OPENAI_MODEL=gpt-5.5   # optional (default gpt-5.5)
+export OPENAI_MODEL=gpt-6-luna   # optional (default gpt-6-luna)
 npm start -- new              # new game: Felipe, 18, Milan, Sunday 27 Sep 2026 09:14
 npm start -- continue         # later, in a new process: continue the most recent game
 npm run smoke                 # live two-session Milestone 1 run; skips without key/network

@@ -14,7 +14,7 @@ export interface OpenAIProviderOptions {
   maxRetries?: number;
 }
 
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+export const DEFAULT_OPENAI_MODEL = 'gpt-6-luna';
 
 /** Live provider: OpenAI Responses API with strict JSON-schema structured output. */
 export class OpenAIProvider implements LLMProvider {

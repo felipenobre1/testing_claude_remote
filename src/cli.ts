@@ -14,7 +14,7 @@ const USAGE = `Startup — Milestone 1
       turns | turn <n|last> [--full] | character <name> | context <name> | events | facts
 
 Options: --db <path> (default data/startup.db or $STARTUP_DB), --debug (print the trace after each turn)
-Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-5.5).
+Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
 In game: type what you do. Commands: /status  /debug  /inspect <what>  /quit`;
 
