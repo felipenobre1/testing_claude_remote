@@ -116,6 +116,8 @@ export class Engine {
     const interp = await this.callStructured<InterpretResult>(trace, 'interpret', interpretSystemPrompt(player.name),
       renderPlayerBriefing(pp, input), 'interpretation', InterpretResultSchema, InterpretResultSchema);
     trace.interpretation = interp;
+    // Self-harm is never simulated: step out of the fiction, change nothing.
+    if (interp.safety === 'self_harm') return this.clarify(trace, game, SELF_HARM_MESSAGE);
     if (interp.clarificationQuestion) return this.clarify(trace, game, interp.clarificationQuestion);
 
     // 2. Resolve who the player is addressing; generate them if they don't exist yet.
@@ -154,7 +156,8 @@ export class Engine {
     const t0 = game.gameTime;
     const t1 = addMinutes(t0, interp.minutesElapsed);
     const location = interp.newLocation ?? pp.scene.location;
-    const scene: Scene = { ...pp.scene, location, activeCharacterIds: [...pp.scene.activeCharacterIds], updatedAt: now };
+    const description = interp.newLocation ? interp.newSceneDescription ?? '' : pp.scene.description; // a new place never inherits the old description
+    const scene: Scene = { ...pp.scene, location, description, activeCharacterIds: [...pp.scene.activeCharacterIds], updatedAt: now };
     const plan: WritePlan = {
       newCharacter: null, interactionsToInsert: [], interactionsToEnd: [], events: [], documents: [], changes: [], scene, newGameTime: t1,
     };
@@ -501,6 +504,13 @@ export class Engine {
 }
 
 // ---- helpers ----
+
+export const SELF_HARM_MESSAGE = [
+  '[Pausing the story]',
+  "This game doesn't play out self-harm. If any part of this is real for you right now, you don't have to handle it alone:",
+  'in Italy you can call Telefono Amico on 02 2327 2327, or 112 in an emergency; elsewhere, findahelpline.com lists free, confidential lines.',
+  "When you're ready, tell me what you do next and the story continues from before that moment.",
+].join('\n');
 
 const label = (channel: string) => (channel === 'phone' ? 'call' : channel === 'message' ? 'chat' : 'conversation');
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');

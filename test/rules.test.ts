@@ -253,3 +253,34 @@ test('a person who is only mentioned, not contacted, is not created', async () =
   assert.equal(s.store.listCharacters(game.id).length, 1);
   s.close();
 });
+
+test('moving somewhere replaces the scene description instead of inheriting the old room', async () => {
+  const s = openSession(tmpDbPath());
+  const { game } = s.engine.newGame();
+  s.llm.enqueue('interpret', interp({
+    intents: ['general_action'], newLocation: 'Home — kitchen', newSceneDescription: 'A small kitchen; coffee cups in the sink.',
+    visibleAction: 'walks to the kitchen', narration: 'You walk to the kitchen.', minutesElapsed: 1,
+  }));
+  await s.engine.takeTurn({ gameId: game.id, input: 'I go to the kitchen' });
+  const scene = s.store.getScene(game.id);
+  assert.equal(scene.location, 'Home — kitchen');
+  assert.equal(scene.description, 'A small kitchen; coffee cups in the sink.');
+  assert.doesNotMatch(scene.description, /Laptop/);
+  s.close();
+});
+
+test('self-harm is never simulated: the story pauses with support info and nothing changes', async () => {
+  const { store, llm, engine, game, close } = await gameWithMatteoOnPhone(tmpDbPath());
+  const before = counts(store, game.id);
+  const revision = store.getGame(game.id)!.revision;
+  llm.enqueue('interpret', interp({ intents: ['general_action'], safety: 'self_harm', narration: 'graphic text that must not be shown' }));
+  const r = await engine.takeTurn({ gameId: game.id, input: '(self-harm attempt)' });
+  assert.equal(r.status, 'clarification');
+  assert.match(r.text, /Pausing the story/);
+  assert.match(r.text, /Telefono Amico/);
+  assert.doesNotMatch(r.text, /graphic text/);
+  assert.equal(llm.callsFor('npc_turn').length, 1, 'no NPC call for this turn');
+  assert.deepEqual(counts(store, game.id), before);
+  assert.equal(store.getGame(game.id)!.revision, revision);
+  close();
+});

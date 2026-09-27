@@ -20,6 +20,8 @@ export const InterpretResultSchema = z.object({
   visibleAction: z.string().max(600).nullable(),
   privateThought: z.string().max(1000).nullable(),
   newLocation: z.string().min(2).max(160).nullable(),
+  newSceneDescription: z.string().max(400).nullable(), // what the new location looks like; required when newLocation is set
+  safety: z.enum(['none', 'self_harm', 'serious_violence']),
   minutesElapsed: z.number().int().min(0).max(120),
   narration: z.string().max(1500),
   clarificationQuestion: z.string().max(400).nullable(),
