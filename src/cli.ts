@@ -5,6 +5,7 @@ import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFa
 import { Engine } from './engine/turn.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
+import { startupPack } from './packs/startup/index.ts';
 
 const USAGE = `Startup — Milestone 1
 
@@ -53,7 +54,7 @@ function liveEngine(store: Store): Engine | null {
   try {
     const fetcher = process.env.STARTUP_FETCH === 'off' ? null : new HttpPageFetcher();
     // The Story Director runs during world turns (at most one model call per game day). STARTUP_DIRECTOR=off disables it.
-    return new Engine(store, new OpenAIProvider(), { fetcher, director: process.env.STARTUP_DIRECTOR !== 'off' });
+    return new Engine(store, new OpenAIProvider(), { pack: startupPack, fetcher, director: process.env.STARTUP_DIRECTOR !== 'off' });
   } catch (e) {
     console.error(`Cannot start live play: ${(e as Error).message}`);
     process.exitCode = 1;

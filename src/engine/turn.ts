@@ -25,7 +25,6 @@ import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import type { GamePack } from '../packs/types.ts';
-import { startupPack } from '../packs/startup/index.ts';
 
 export interface TurnRequest {
   gameId: string;
@@ -72,15 +71,15 @@ export class Engine {
   private interpretSchema;
 
   /**
-   * `pack`: the world (default: Startup).
+   * `pack`: the world this engine runs (chosen by the application; the engine knows no packs).
    * `fetcher`: how shared links are opened (null = links are heard but never opened).
    * `rng`: randomness for decisions and world turns, from seeds derived from game + request (tests pass a fixed one).
    * `director`: let the Story Director propose new situations during world turns (one model call per game day).
    */
-  constructor(store: Store, llm: LLMProvider, opts: { pack?: GamePack; now?: () => string; fetcher?: PageFetcher | null; rng?: RngFactory; director?: boolean } = {}) {
+  constructor(store: Store, llm: LLMProvider, opts: { pack: GamePack; now?: () => string; fetcher?: PageFetcher | null; rng?: RngFactory; director?: boolean }) {
     this.store = store;
     this.llm = llm;
-    this.pack = opts.pack ?? startupPack;
+    this.pack = opts.pack;
     this.now = opts.now ?? (() => new Date().toISOString());
     this.fetcher = opts.fetcher ?? null;
     this.rng = opts.rng ?? seededRng;
@@ -430,8 +429,6 @@ export class Engine {
         store.upsertRelationship(plan.newCharacter.relationship);
         w('relationships', 'insert', plan.newCharacter.relationship.id, 'backstory');
       }
-      for (const wr of economy.packState.commit(store)) writes.push(wr);
-      for (const wr of applyOps(store, economy)) writes.push(wr);
       for (const i of plan.interactionsToInsert) {
         store.insertInteraction(i);
         w('interactions', 'insert', i.id);
@@ -448,6 +445,9 @@ export class Engine {
         store.linkEventDocument(eventId, doc.id);
         w('event_documents', 'insert', `${eventId}→${doc.id}`);
       }
+      // Pack state, then engine operations (accounts, offers, decisions, threads, schedule) — after the events they link to.
+      for (const wr of economy.packState.commit(store)) writes.push(wr);
+      for (const wr of applyOps(store, economy)) writes.push(wr);
       for (const i of plan.interactionsToEnd) {
         store.endInteraction(i.id, i.gameTime);
         w('interactions', 'update', i.id, 'ended');

@@ -5,6 +5,7 @@ import { Store } from '../src/db/store.ts';
 import type { CharacterProposal, DecisionState, InterpretResult } from '../src/domain/schemas.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
+import { startupPack } from '../src/packs/startup/index.ts';
 
 export function tmpDbPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'startup-test-')), 'game.db');
@@ -14,7 +15,7 @@ export function tmpDbPath(): string {
 export function openSession(path: string, opts: { rng?: (seed: string) => () => number; director?: boolean } = {}) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  const engine = new Engine(store, llm, opts);
+  const engine = new Engine(store, llm, { pack: startupPack, ...opts });
   return { store, llm, engine, close: () => store.close() };
 }
 

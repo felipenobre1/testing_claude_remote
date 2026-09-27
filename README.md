@@ -1,13 +1,28 @@
-# Startup — Milestone 1
+# Living Story Engine — Game Pack: Startup
 
-A persistent AI life/startup simulation. This repository contains only **Milestone 1**. It proves that an NPC (Matteo) can be:
+A persistent world played through natural language. It has no script, no chapters and no predetermined ending.
 
-- created on demand
-- remembered across sessions
-- given relationships, memories and knowledge
-- kept strictly within what he could have perceived
+- **The world moves without you.** People have their own lives, goals and conflicts, and situations develop whether or not you're involved.
+- **You live through it.** You can follow what's happening, ignore it, interfere, or change its course.
 
-All canonical state lives in SQLite. The LLM proposes, and the backend validates and commits.
+The code has two layers:
+
+- **Living Story Engine** (`src/engine/`) — generic and knows no particular world. It covers:
+  - characters, relationships, memory, knowledge and events with observers
+  - time and resources (accounts, a ledger, monthly flows)
+  - offers and promises
+  - the Decision Resolution Engine
+  - World Turns, Story Threads and the Story Director
+  - context building, validation, persistence and traces
+- **Game Pack** (`src/packs/<pack>/`) — defines what kind of world it is:
+  - setting and starting situation
+  - the kinds of offers people make and what accepting them does
+  - world-specific actions and state
+  - prompt flavour and status line
+
+**Startup** (`src/packs/startup/`) is the first and only playable pack. You play an 18-year-old in the real Milan, September 2026, with €2,500. The pack adds companies, cap tables and product stage, plus four offer kinds: cofounder, job, customer purchase and investment. Other worlds (political sci-fi, fantasy, medieval) would be new packs on the same engine; `test/engine/pack.test.ts` runs a tiny medieval test pack to prove it.
+
+The model portrays people and proposes; the engine resolves, validates and commits. SQLite is canonical.
 
 ## Run it
 
@@ -39,6 +54,9 @@ npm start -- inspect character Matteo          # identity, owned relationships, 
 npm start -- inspect context Matteo            # exactly what Matteo would receive if called now
 npm start -- inspect events                    # every event with observers vs participants
 npm start -- inspect facts                     # canonical truth
+npm start -- inspect money                     # accounts, pack state (companies/cap tables), offers, promises, monthly flows, ledger
+npm start -- inspect decisions                 # hidden decision states and every resolved decision (score, roll, reasons)
+npm start -- inspect world                     # story threads (world truth) and the world schedule
 ```
 
 Inside the game you can use `/inspect …`, `/debug` (print the trace after every turn), `/status` and `/quit`.
@@ -71,44 +89,96 @@ Reading a trace tells you which layer failed:
 
 ```
 src/
-  db/migrations.ts    schema (append-only migrations)
-  db/store.ts         typed SQLite access; perspective queries (owned-by / observed-by)
-  domain/types.ts     record types
-  domain/schemas.ts   zod schemas for all model output + JSON-schema conversion
-  llm/provider.ts     LLMProvider interface (one structured-completion method)
-  llm/openai.ts       OpenAIProvider — Responses API, strict json_schema output
-  llm/scripted.ts     ScriptedProvider — deterministic, for tests
-  engine/newGame.ts   seed: player, facts, opening scene
-  engine/context.ts   Context Builder (permission filter → ranking → render)
-  engine/prompts.ts   system prompts per task
-  engine/validate.ts  allowlist validation of proposals and generated characters
-  engine/turn.ts      turn processor, atomic commit, idempotency
-  engine/trace.ts     trace shape
-  debug/inspect.ts    text views for the CLI
-  cli.ts              play / continue / inspect
-scripts/smoke.ts      live smoke run
-test/                 node:test suites
+  engine/                       LIVING STORY ENGINE (no pack vocabulary — enforced by a test)
+    turn.ts                     turn processor: interpret → resolve → portray → world turn → atomic commit
+    context.ts                  Context Builder: permission filter → ranking → render (perspective only)
+    planner.ts                  per-turn world planner: resources, offers, promises, threads, schedule; perspective briefings
+    decision.ts                 Decision Resolution Engine (limits → weighted factors → bounded seeded roll → outcome)
+    world.ts                    World Turn Engine, Story Threads, Story Director (propose → validate → commit)
+    random.ts                   seeded randomness (same seed ⇒ same result; replays never reroll)
+    validate.ts                 allowlists: NPC changes, portrayals vs resolved outcomes, generated characters, decision states
+    prompts.ts                  prompt templates (setting text comes from the pack)
+    newGame.ts                  generic world seeding
+    web.ts, trace.ts, util.ts   shared links, trace shape, time helpers
+  packs/
+    types.ts                    GamePack contract (the only boundary between engine and world)
+    startup/                    GAME PACK: STARTUP — companies, cap tables, product stage, offer kinds, actions, seed, prompts
+  db/                           SQLite: core migrations + per-pack migrations, typed store
+  domain/                       record types and zod schemas (engine-level)
+  llm/                          LLMProvider interface; OpenAIProvider (Responses API); ScriptedProvider (tests)
+  debug/inspect.ts, cli.ts      inspection views and the CLI
 ```
+
+### What is generic and what is Startup-specific
+
+| Generic engine | Startup pack |
+|---|---|
+| Character, Relationship, Memory, Knowledge, Event + observers, Fact, Scene | the player (Felipe, 18, Milan) and the opening |
+| Time, World Turns, World Schedule | — |
+| Resources: accounts owned by characters or pack **entities**; ledger; monthly flows | companies as entities; company cash |
+| Offers (generic `kind`, subject, label, numeric `terms`) and counter-offers | offer kinds `join_company`, `hire`, `purchase`, `investment` and what accepting them does (issuing shares, salaries, subscriptions, investment) |
+| Promises / obligations, deadlines, overdue events | — |
+| Decision states: goals, pressures, alternatives, limits on terms, `requiresApproval`, weighted criteria | term keys (`priceMonthly`, `salaryMonthly`, `equityPercent`, `amount`) |
+| Decision Resolution Engine and its outcomes | — |
+| Story Threads, Story Director, message delivery | Director background ("the Milan startup ecosystem") |
+| Pack actions interface | `found_company`, `invest_in_company`, `advance_product` |
+
 
 ### Turn lifecycle
 
 ```
 player input (+ requestId)
-  → already committed? return stored response (no model calls, no writes)
-  → load game, scene, open conversation                       [no transaction held]
-  → LLM 1  interpret   (player perspective)
-           splits input → spokenText / visibleAction / privateThought / target / intents
-  → resolve target by name; if unknown → LLM generate_character → validate
-  → Context Builder for the NPC (only what the NPC may know + what they perceive this turn)
-  → LLM 2  npc_turn    (NPC perspective) → dialogue + proposed changes
-  → validate every proposal (allowlist); any rejection → one corrective retry → else fail the turn
-  → BEGIN IMMEDIATE: request-id + revision check, write everything, revision+1, store turn + response + trace; COMMIT
-  → return the response (only after commit)
+  → already committed? return the stored response (no model calls, no rolls, no writes)
+  → LLM interpret (player perspective): speech / visible action / private thought / target / actions
+  → resolve or generate the person addressed
+  → player actions (money, offers, promises, pack actions), checked against simulated state
+  → if an offer is waiting on this NPC:  DECISION
+        load/generate their hidden decision state
+        LLM appraise: only the factors THEY care about, −2…+2, grounded in evidence
+        ENGINE resolve: limits → weighted score → bounded seeded roll → outcome
+  → LLM portray the NPC (their perspective; must express the resolved outcome, never change it)
+  → WORLD TURN for the time that passed (see below)
+  → one transaction: revision check, all writes, turn + response + trace
 ```
 
-Most turns make two model calls: `interpret` and `npc_turn`. `generate_character` only runs the first time someone is mentioned.
+Model calls per turn:
 
-The `interpret` call has to come first because the NPC must never see the raw input: it may contain the player's private thoughts. Consequence extraction is **not** a separate call. The NPC call returns its proposed changes together with the dialogue.
+- **Every turn:** `interpret`.
+- **When you talk to someone:** `npc_turn`.
+- **When someone decides on an offer:** `npc_appraise`.
+- **Rarely:** `generate_character` (a new person) and `decision_state` (a person's first decision of a kind).
+- **At most once per game day:** `director`.
+
+### Decision Resolution Engine
+
+The model is never the judge of whether you succeed. For a meaningful decision:
+
+1. **Hard limits first.** A limit on a term, such as "`priceMonthly` at most 300" or "`toll` at least 50", or needing someone's approval, removes outcomes entirely. No roll can bring them back. A liked offer above someone's authority becomes `counter` or `escalate_to_decision_maker`, never `accept`.
+2. **Weighted criteria.** Only this actor's criteria count (weight 0–3). Eloquence on a factor they don't care about earns nothing.
+   - The engine computes `terms_fit` and `alternatives` from real numbers.
+   - The model appraises the other factors from the actor's point of view.
+3. **A bounded roll** of at most ±10 points out of 100, seeded by game + request. It adds uncertainty, not chaos.
+4. **Outcome**, from best to worst: `accept`, `accept_conditionally`, `escalate_to_decision_maker`, `counter`, `request_more_information`, `delay`, `reject`, `disengage`. Delays and escalations are revisited later by the world turn, when people get back to you.
+
+Rejection, delay and counters are normal, committed outcomes. Decision states are hidden from the player and from other characters; only the actor sees their own situation.
+
+### World turns, Story Threads and the Story Director
+
+Whenever time passes, the world moves:
+
+1. Monthly flows and deadlines. Overdue promises become events that both parties observe.
+2. Scheduled developments fall due, e.g. a message someone sends you.
+3. **Story Threads** gain momentum from their urgency and a seeded roll. A thread is a persistent developing situation, not a quest: "Matteo weighing an internship offer", "a rival launching".
+   - At momentum 100, the thread's deciding actor resolves it through the same Decision Resolution Engine.
+   - The outcome becomes events, can change that person's future circumstances, and may produce a message to you if they would plausibly tell you.
+   - If you ignore a thread, it resolves anyway.
+4. Deferred decisions on your offers are revisited.
+5. Once per game day, the **Story Director** reviews world truth and may propose new threads or escalations.
+   - Every proposal must cite real events, and the engine validates participants, actors and decision states. Anything citing nothing is rejected.
+   - It never writes a plot and never steers you.
+
+**Who knows what:** world developments are objective truth. Characters and the player learn about them only through events they observe (a conversation, a message, something public). The Director may see everything; nobody else can.
+
 
 ### Knowledge rules
 
@@ -143,25 +213,26 @@ If you share a link in a conversation ("check www.gradeeconomy.com"), the backen
 - **Not fetched:** links inside private thoughts are never opened.
 - **Turning it off:** set `STARTUP_FETCH=off` to disable fetching.
 
-### Milestone 2: money, company, equity, promises, time
+### Resources, offers and promises (engine) + Startup mechanics (pack)
 
-The code decides everything that has an objective answer; the model only proposes.
+Code decides everything that has an objective answer; the model only proposes.
 
-- **Player actions:** the interpreter can propose `pay`, `give_money`, `found_company`, `invest_in_company`, `offer_equity`, `make_promise`, `fulfill_promise` and `advance_product`. The economy planner checks each one against a simulated copy of real balances and ownership.
-  - Impossible actions ("buy a car for €30,000") are **game outcomes**, reported to the player as `✗ …`. They are not model errors.
-  - Unknown people or ids count as model errors, and those actions are skipped.
-- **Decisions only people can make:** accepting an equity offer or promising help. The NPC decides (`respond_to_offer`, `make_promise`, `fulfill_promise`); the engine executes the result.
-  - On acceptance, new shares are issued so the newcomer owns exactly the offered percentage, and everyone else is diluted. For example, 1,000,000 founder shares plus 40% gives 666,667 new shares, a 60/40 split.
-- **Money:** integer cents in `accounts`, moved only through `transactions` (the ledger). The outside world is `NULL`.
-- **Time is a resource:** actions take realistic time, up to a week per turn. Anything longer than an hour ends an open call.
-  - When the clock passes a date, recurring costs are charged, or the service is cancelled if the money isn't there.
-  - Promises past their due date become **overdue** events that both parties observe, so the other person knows.
+- **Player actions.** The engine provides `pay`, `give_money`, `make_offer`, `respond_to_offer`, `make_promise` and `fulfill_promise`. The Startup pack adds `found_company`, `invest_in_company` and `advance_product`.
+  - The planner checks each action against a simulated copy of real balances and state.
+  - Impossible actions ("buy a car for €30,000") are **world outcomes**, reported as `✗ …`.
+  - Malformed actions, or ones naming unknown people or ids, are model errors and are skipped.
+- **Offers** are decided by the Decision Resolution Engine and executed by the pack. For example, accepting `join_company` issues new shares so the newcomer owns exactly the offered percentage: 1,000,000 founder shares plus 40% gives 666,667 new shares, a 60/40 split.
+- **Money:** integer cents in `accounts` (owned by characters or pack entities), moved only through `transactions`. The outside world is `NULL`.
+- **Time is a resource:** up to a week per turn. A long activity ends an open call.
 - **Who sees what:**
-  - An NPC sees only companies they own part of, and offers and promises they are a party to.
-  - The player sees their own cash, companies and promises.
-- **Status line:** after every turn the CLI prints a line built only from canonical state, e.g. `── Sun 27 Sep, 09:15 · Home — bedroom · €2,000.00 · Grade Economy 60.0% · €500.00 · idea · texting Matteo ──`.
-- **Inspect:** `npm start -- inspect money` shows accounts, cap tables, offers, promises, recurring costs and the full ledger.
-- **Old saves:** saves from Milestone 1 are migrated automatically. The `cash_eur` Fact becomes a real account.
+  - An NPC sees only pack state they are part of (e.g. companies they own a share of), offers and promises they are party to, and situations in their own life.
+  - The player sees their own resources, holdings, offers and promises, and the messages and news they received.
+- **Status line** after every turn, built only from canonical state. Example:
+
+  ```
+  ── Sun 27 Sep, 09:15 · Home — bedroom · €2,000.00 · Grade Economy 60.0% · €500.00 · idea · texting Matteo ──
+  ```
+- **Old saves** migrate automatically.
 
 ## SQLite schema
 
@@ -170,7 +241,7 @@ The code decides everything that has an objective answer; the model only propose
 | `games` | id, timezone (Europe/Rome), `game_time` (local wall clock), player id, **revision** |
 | `characters` | stable identity only: name, age, gender, role, occupation, background, personality, traits/values/goals/fears (JSON), location, origin (`seed`/`generated`) |
 | `relationships` | **directional** `from → to` summary, source (`backstory`/`gameplay`), source event. No numeric scores. |
-| `facts` | canonical truth (`subject, predicate, value`), e.g. the player's `cash_eur = 2500` |
+| `facts` | canonical truth (`subject, predicate, value`) — never money (money lives in the ledger) |
 | `events` | canonical history: type, summary, observable transcript, importance, time, interaction |
 | `event_participants` | who acted / was addressed / was **mentioned** (identity) |
 | `event_observers` | who **perceived** it, and through which channel (perception) |
@@ -179,17 +250,25 @@ The code decides everything that has an objective answer; the model only propose
 | `scenes` | current location, description, physically present characters, open interaction |
 | `interactions` | live-conversation bookkeeping (channel, participants, start/end). History stays in events. |
 | `documents` + `event_documents` | snapshots of real web pages shared in play; reachable only through an observed event |
-| `accounts` / `transactions` | money in integer cents; every change is a ledger entry |
-| `companies` / `shareholdings` | company state (stage, total shares) and the cap table |
-| `offers` | equity offers awaiting the other person's decision |
+| `accounts` / `transactions` | money in integer cents, owned by a character or a pack entity; every change is a ledger entry |
+| `recurring_payments` | monthly flows (costs, salaries, subscriptions), from/to an account or the outside world |
+| `offers` | generic offers: `kind`, subject, label, numeric `terms`, status, attempts, last outcome, when to reconsider, counter-offer parent |
 | `obligations` | promises and debts between characters (due date, status, overdue notification) |
-| `recurring_payments` | monthly costs, charged as game time passes |
+| `decision_states` | per character and domain: goals, pressures, alternatives, limits, approval, weighted criteria — **hidden** |
+| `decisions` | every engine-resolved decision: outcome, score, roll, seed, reasons, full detail |
+| `story_threads` + `thread_events` | persistent developing situations: momentum, urgency, visibility, participants, causes, how they resolve |
+| `world_schedule` | what the world will do and when (messages, Director reviews) |
+| `pack_migrations` | which game-pack migrations ran |
+| `companies` / `shareholdings` | **Startup pack tables**: company state (stage, total shares) and the cap table |
 | `turns` | request id (unique once final), status, base/committed revision, stored response, full trace |
 
-## Known limitations (Milestone 1)
+## Known limitations
 
 - Only the player→NPC conversation is modelled. NPCs don't talk to each other yet, and knowledge doesn't propagate between NPCs. The schema supports propagation through events and observers.
 - Game time is a naive local clock. DST is ignored; the first transition is 25 Oct 2026.
 - Retrieval is keyword/recency/importance scoring. That's fine for dozens of rows, not thousands.
 - One conversation at a time. Addressing someone new ends the current conversation.
 - All-or-nothing validation: one bad proposal fails the whole turn after one retry.
+- Threads are resolved by one actor's decision. Branching and merging threads, and group decisions (a council, a board), are not modelled yet.
+- NPCs only act through threads, deferred decisions and scheduled messages; there is no free-running NPC agency beyond what the Director proposes.
+- The Story Director only runs live (a model call per game day); it is exercised with scripted proposals in tests.

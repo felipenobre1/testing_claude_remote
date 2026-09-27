@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/cli.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts test/engine/*.test.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "node --disable-warning=ExperimentalWarning scripts/smoke.ts"
   },

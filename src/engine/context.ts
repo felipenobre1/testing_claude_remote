@@ -38,7 +38,7 @@ export interface NpcContextInput {
   sceneLocation: string;
   pending?: PendingCharacter;
   pendingDocuments?: WebDocument[]; // pages opened this turn (shared by the partner)
-  economy?: string; // companies this NPC is part of, offers and promises involving them (built by the economy planner)
+  economy?: string; // pack state this NPC is part of, offers and promises involving them (built by the world planner)
   privateSituation?: string; // this NPC's own decision state (they know their own limits); never shown to anyone else
   resolvedDecision?: string; // engine-resolved outcome to portray (portrayal call only)
   situations?: string; // story threads this NPC is part of
