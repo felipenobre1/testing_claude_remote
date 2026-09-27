@@ -109,7 +109,11 @@ export class HttpPageFetcher implements PageFetcher {
       }
       return fail('too many redirects', current);
     } catch (e) {
-      const msg = e instanceof Error ? (e.name === 'TimeoutError' ? 'timed out' : e.message) : String(e);
+      // Node's fetch reports network failures as "fetch failed"; the useful reason is in `cause`.
+      const cause = e instanceof Error ? (e.cause as { code?: string; message?: string } | undefined) : undefined;
+      const msg = e instanceof Error
+        ? e.name === 'TimeoutError' ? 'timed out' : cause ? `${e.message}: ${cause.code ?? ''} ${cause.message ?? ''}`.trim() : e.message
+        : String(e);
       return fail(msg, current);
     }
   }
