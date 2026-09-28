@@ -473,8 +473,9 @@ export class Engine {
     let beat: SceneBeat | null = null;
     const conversationOpen = Boolean(interaction && !conversationEnded);
     const playerDiedBeforeBeat = economy.ctx.player.status === 'dead';
-    if (!playerDiedBeforeBeat && this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed })) {
-      beat = await this.sceneBeat(trace, game, player, everyone, pending, economy, plan, interp, conversationOpen, world);
+    const pressing = trace.world?.consequences ?? [];
+    if (!playerDiedBeforeBeat && this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed, pressing: pressing.length })) {
+      beat = await this.sceneBeat(trace, game, player, everyone, pending, economy, plan, interp, conversationOpen, world, pressing);
     }
 
     // 9. Compose the turn: literary narration (everything already decided) or the concise game text.
@@ -701,7 +702,7 @@ export class Engine {
 
   /** A scene beat: proposed by the model, validated against the world, made canonical in this turn's plan. */
   private async sceneBeat(trace: Trace, game: Game, player: Character, everyone: Character[], pending: PendingCharacter | undefined,
-    economy: WorldPlanner, plan: WritePlan, interp: InterpretResult, conversationOpen: boolean, world: ReturnType<Engine['worldOf']>): Promise<SceneBeat | null> {
+    economy: WorldPlanner, plan: WritePlan, interp: InterpretResult, conversationOpen: boolean, world: ReturnType<Engine['worldOf']>, pressing: string[] = []): Promise<SceneBeat | null> {
     const store = this.store;
     const known = pending ? [...everyone, pending.character] : everyone;
     const recent = [...store.listEventsObservedBy(player.id).slice(-8), ...plan.events, ...economy.events]
@@ -709,7 +710,7 @@ export class Engine {
     const notes = store.listKnowledgeOf(player.id).slice(-8).map((k) => `- ${k.topic}: ${k.belief}`);
     const user = beatUserPrompt({
       gameTime: plan.newGameTime, scene: plan.scene, player, people: known.filter((c) => !c.isPlayer), recent, notes,
-      justNow: [interp.narration, ...economy.results].filter(Boolean).join(' '), playerState: this.pack.briefing.player(economy),
+      justNow: [interp.narration, ...economy.results].filter(Boolean).join(' '), playerState: this.pack.briefing.player(economy), pressing,
     });
     // A beat is extra: if it can't be made valid (or the call fails), the player's turn goes ahead without it.
     let beat: SceneBeat;

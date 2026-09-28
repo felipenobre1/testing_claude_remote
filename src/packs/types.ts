@@ -96,7 +96,7 @@ export interface GamePack {
 }
 
 /** A character's decision to attack the player. intent: kill (the player can die), hurt, humiliate, drive_off. threat: 1–5, how dangerous the attacker is. */
-export interface NpcAttack { intent: 'kill' | 'hurt' | 'humiliate' | 'drive_off'; threat: number; how: string }
+export interface NpcAttack { intent: 'kill' | 'hurt' | 'humiliate' | 'drive_off'; threat: number; how: string; by?: string | null }
 
 export interface PackSeedContext {
   store: Store;

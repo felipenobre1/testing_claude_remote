@@ -211,6 +211,13 @@ export class WorldPlanner {
     this.decisionStates.set(`${characterId}/${domain}`, state);
     this.ops.push({ op: 'upsert_decision_state', gameId: this.ctx.gameId, characterId, domain, state });
   }
+  /**
+   * Something the player did will come back to them: when the time comes, the world answers it
+   * (a scene beat about it is forced). summary says what happened, to whom, and who saw it.
+   */
+  consequence(summary: string, dueInMinutes: number) {
+    this.schedule(addMinutes(this.ctx.gameTime, Math.max(0, Math.round(dueInMinutes))), 'consequence', { summary });
+  }
   schedule(dueGameTime: string, kind: string, payload: Record<string, unknown>, threadId: string | null = null) {
     const item: ScheduledItem = {
       id: newId('sch'), gameId: this.ctx.gameId, dueGameTime, kind, payload, threadId, status: 'pending', createdGameTime: this.ctx.gameTime, createdAt: this.ctx.now,

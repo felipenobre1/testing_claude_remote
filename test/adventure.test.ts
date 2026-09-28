@@ -28,7 +28,7 @@ function start(opts: { roll?: number; beats?: boolean; narrator?: boolean; direc
   return { store, llm, engine, game, player, opening, me, char, turn };
 }
 const fight = (opponent: string, extra: Record<string, unknown> = {}) =>
-  ({ action: 'fight', opponent, threat: 3, intent: 'kill', weaponName: 'curved knife', witnessed: true, ...extra });
+  ({ action: 'fight', opponent, threat: 3, intent: 'kill', weaponName: 'curved knife', witnessed: true, guards: null, ...extra });
 
 test('the example world: a fighter with skills, gear, fame, a debt and people who matter', () => {
   const s = start();
@@ -245,7 +245,7 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., 05:40 · .* · dr 30\.00 · ❤ 100\/100 · ⚔ combate 2 · ★ algumas pessoas sabem seu nome ──$/);
 
   const fightTurn = interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', suggestions: ['Treinar sozinho'],
-    actions: [{ action: 'fight', opponent: 'um bandido de beco', threat: 2, intent: 'drive_off', weaponName: 'curved knife', witnessed: false }] });
+    actions: [{ action: 'fight', opponent: 'um bandido de beco', threat: 2, intent: 'drive_off', weaponName: 'curved knife', witnessed: false, guards: null }] });
   const prose = 'O bandido avança; a faca do seu pai encontra o braço dele, e ele foge pelo beco.';
   llm.enqueue('interpret', fightTurn)
     .enqueue('narrate',
@@ -330,7 +330,7 @@ test('people attack the player: a mortal insult gets a knife, a lethal fight can
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I tell Kesh I slept with his wife' });
   assert.equal(r.status, 'committed', r.error ?? '');
   assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED|YOUR CHARACTER/); // briefing sanity
-  assert.match(s.llm.callsFor('npc_turn')[0]!.system, /attack: if your character would physically attack the other person NOW/);
+  assert.match(s.llm.callsFor('npc_turn')[0]!.system, /attack: only when physical violence NOW fits who you are and what just happened[\s\S]*A powerful person rarely brawls: they have it done/);
   assert.match(r.text, /⚔ Kesh Adar attacks you to kill: crushing defeat\. Kesh Adar beats you down completely — you are at their mercy\. You took a grievous wound to the left arm \(−60; 40\/100\)/);
   assert.equal(r.gameOver, undefined);
 
@@ -372,4 +372,49 @@ test('someone who only means to humiliate can beat you bloody but not kill you; 
   assert.equal(r.status, 'committed', r.error ?? '');
   assert.match(r.text, /⚔ Vorn attacks you: decisive victory\. Vorn is beaten back\./);
   t.store.close();
+});
+
+test('attacking a guarded lord: the guards stand in the way, and what you did comes back to you', async () => {
+  // A lord with guards (threat 5). Roll 0.5: the guards win — the player never reaches the lord.
+  const s = start({ roll: 0.5 });
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '',
+    actions: [fight('Lord Varr', { threat: 2, intent: 'kill', guards: { who: 'four House Varr guards in lamellar', threat: 5 } })] }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I rush the lord with my knife' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(r.text, /⚔ Fight — four House Varr guards in lamellar: (defeat|crushing defeat)[\s\S]*You never reach Lord Varr\./);
+  // The world will answer: an arrest (or worse) is scheduled within minutes.
+  const due = s.store.listScheduled(s.game.id, 'pending').find((i) => i.kind === 'consequence')!;
+  assert.match(String(due.payload.summary), /Rhen attacked Lord Varr and was stopped by four House Varr guards in lamellar in front of witnesses/);
+  s.store.close();
+
+  // Killing a known person in public: the consequence comes due; the next beat must answer it, whatever the pace.
+  const t = start({ roll: 1, beats: true });
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', actions: [fight('Kesh Adar')] }));
+  await t.engine.takeTurn({ gameId: t.game.id, input: 'I kill Kesh in the yard' });
+  assert.ok(t.store.listScheduled(t.game.id, 'pending').some((i) => i.kind === 'consequence' && /killed Kesh Adar \(rising pit fighter sponsored by House Varr\) in front of witnesses/.test(String(i.payload.summary))));
+  const guards = { name: 'Captain Ilse Maro', age: 45, gender: 'female', role: 'captain of the House Varr watch', occupation: 'watch captain', background: 'Twenty years keeping House Varr\'s order in the lower city.',
+    personality: 'Cold, procedural, merciless with killers.', traits: ['cold', 'procedural'], values: ['order'], goals: ['Hang Kesh\'s killer'], fears: ['Losing face with the house'], location: 'Ashkar',
+    relationshipToPlayer: 'Hunting the man who killed Kesh Adar.' };
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 5 * 60, narration: 'You lie low.' }))
+    .enqueue('scene_beat', (req: { user: string }) => {
+      assert.match(req.user, /CONSEQUENCES DUE NOW — this beat MUST be the world answering this[\s\S]*- Rhen killed Kesh Adar/);
+      return { kind: 'threat', title: 'The watch comes', perceived: 'Boots on the ladder. The watch captain and six spears.', involves: [], newPerson: guards,
+        opensConversation: { name: 'Captain Ilse Maro', channel: 'in_person', openingLine: 'Rhen. You\'re coming with us.' }, choice: 'Surrender, or fight six spears.', offer: null, attack: null };
+    });
+  const r2 = await t.engine.takeTurn({ gameId: t.game.id, input: 'I hide in my niche' });
+  assert.equal(r2.status, 'committed', r2.error ?? '');
+  assert.equal(r2.beat, 'The watch comes');
+  assert.ok(!t.store.listScheduled(t.game.id, 'pending').some((i) => i.kind === 'consequence'));
+  t.store.close();
+});
+
+test('a lord has others do it: an attack by his guards is a fight with the guards', async () => {
+  const s = start({ roll: 0 });
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Sarai Tul', relationHint: null }, channel: 'in_person', spokenText: 'Take your ledger and choke on it.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Teach him some manners.', attack: { intent: 'humiliate', threat: 3, how: 'two guards with cudgels', by: 'her two guards' } }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult the collector' });
+  assert.match(r.text, /⚔ her two guards \(for Sarai Tul\) attack you: /);
+  assert.equal(s.char('Sarai Tul').status, 'alive');
+  assert.ok(s.me().health >= 1);
+  s.store.close();
 });

@@ -52,7 +52,8 @@ const THRESHOLD: Record<WorldSeed['style']['pace'], number> = { quiet: Infinity,
  * Is a beat due? Counts the player's recent turns in which nothing came to them (no NPC answered,
  * no beat). Long stretches of time also make one due (outside quiet worlds).
  */
-export function beatDue(store: Store, gameId: string, pace: WorldSeed['style']['pace'], thisTurn: { npcResponded: boolean; minutes: number }): boolean {
+export function beatDue(store: Store, gameId: string, pace: WorldSeed['style']['pace'], thisTurn: { npcResponded: boolean; minutes: number; pressing?: number }): boolean {
+  if (thisTurn.pressing) return true; // the world must answer something the player did — at any pace
   if (pace === 'quiet') return false;
   if (thisTurn.npcResponded) return false; // someone is already talking to the player
   if (thisTurn.minutes >= 6 * 60) return true;
@@ -71,6 +72,7 @@ THE WORLD BIBLE (binding):
 ${bible}
 
 Propose ONE thing that happens now and puts a real decision in front of the player:
+- Proportionality: what happens to the player follows from what they did and said, to whom, where, and who saw it. People do not attack without a reason that fits them and the moment — but insults, crimes and violence against the powerful are answered, often by others acting for them (guards, kin, hirelings, the law).
 - It grows out of the world: its factions, dangers and customs, the people already in play, what just happened, and the player's AMBITION (opportunities and obstacles on the road to it; rivals; costs; temptations). Never a random event with no roots.
 - kind: arrival (someone comes), message, encounter (a stranger approaches), incident (something happens nearby), news (word reaches them), opportunity, threat.
 - perceived: what the player sees/hears, concretely and plainly, 1–3 sentences. Do NOT decide what the player does or how it ends.
@@ -86,7 +88,7 @@ Return JSON only.`;
 
 export function beatUserPrompt(opts: {
   gameTime: string; scene: { location: string; description: string }; player: Character; people: Character[];
-  recent: string[]; notes: string[]; justNow: string; playerState: string[];
+  recent: string[]; notes: string[]; justNow: string; playerState: string[]; pressing?: string[];
 }): string {
   return [
     `NOW: ${formatGameTime(opts.gameTime)}`,
@@ -97,6 +99,7 @@ export function beatUserPrompt(opts: {
     'WHAT HAS HAPPENED RECENTLY:', ...(opts.recent.length ? opts.recent : ['(nothing yet)']),
     ...(opts.notes.length ? ['WHAT THE PLAYER KNOWS:', ...opts.notes] : []),
     `WHAT THE PLAYER JUST DID: ${opts.justNow || '(nothing in particular)'}`,
+    ...(opts.pressing?.length ? ['', 'CONSEQUENCES DUE NOW — this beat MUST be the world answering this, proportionally (who was wronged, their power, allies, kin, witnesses, the law): arrest, the watch, revenge, a bounty, a summons, fear, respect, a price on the player\'s head…', ...opts.pressing.map((x) => `- ${x}`)] : []),
   ].join('\n');
 }
 

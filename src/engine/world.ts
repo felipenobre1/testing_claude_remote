@@ -39,6 +39,8 @@ export interface WorldTurnTrace {
   scheduled: { id: string; kind: string; due: string; result: string }[];
   threads: { id: string; title: string; momentumBefore: number; gain: number; momentumAfter: number; resolved?: { outcome: Outcome; roll: number; score: number } }[];
   deferred: { offerId: string; outcome: Outcome; roll: number }[];
+  /** What the player did that the world must answer now (consequence clocks that ran out). */
+  consequences: string[];
   director?: { ran: boolean; proposal?: DirectorProposal; accepted: string[]; rejected: { item: string; reason: string }[] };
 }
 
@@ -49,7 +51,7 @@ const nextDirectorTime = (after: string) => {
 };
 
 export async function runWorldTurn(p: WorldPlanner, from: string, to: string, deps: WorldTurnDeps): Promise<WorldTurnTrace> {
-  const trace: WorldTurnTrace = { from, to, scheduled: [], threads: [], deferred: [] };
+  const trace: WorldTurnTrace = { from, to, scheduled: [], threads: [], deferred: [], consequences: [] };
   const { store } = deps;
   const gameId = p.ctx.gameId;
   const player = p.ctx.player;
@@ -76,6 +78,9 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
     } else if (item.kind === 'weekly_report') {
       weeks.push({ since: String(item.payload.since ?? item.dueGameTime), until: item.dueGameTime });
       trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'report' });
+    } else if (item.kind === 'consequence') {
+      trace.consequences.push(String(item.payload.summary));
+      trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'must be answered now' });
     } else if (item.kind === 'director_review') {
       directorDue = true;
       trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'review due' });
@@ -282,6 +287,7 @@ Propose at most two NEW situations (story threads) and any ESCALATIONS of existi
 - messageToPlayer: only if that person would plausibly tell the player; otherwise null (the player may never find out).
 - Respect the bible: its tone, realism, player significance and design principles hold even if the player later becomes powerful.
 - Follow the STORY PACE in the bible. quiet: most of the time the right answer is no new thread. steady: a new situation every few days. eventful: most days something new develops, preferably involving the player or touching their ambition (a challenge, a patron, a rival's move, a debt called in).
+- Actions have consequences proportional to who was wronged, their power, allies and kin, the witnesses and the law: grudges, revenge, bounties, arrests, summons, fear, respect. Model them as threads where the events support it.
 - messageToPlayer is read by the player: write it in the PLAYER'S LANGUAGE from the bible (English if none).
 - Situations involving the player still need another actor who decides; the player's own choices are theirs. Return JSON only.`;
 }
