@@ -2,10 +2,12 @@ import { z } from 'zod';
 import type { Character } from '../../domain/types.ts';
 import type { WorldPlanner } from '../../engine/planner.ts';
 import { newId } from '../../engine/util.ts';
+import type { Store } from '../../db/store.ts';
 import type { GamePack, PackAction } from '../types.ts';
 import { ADVENTURE_WORLD } from './world.ts';
 import {
-  ADVENTURE_MIGRATIONS, AdventureState, advRepo, fameLabel, fameLabelIn, MAX_LEVEL, practiceFor, SKILLS, type Injury, type Item, type Profile,
+  ADVENTURE_MIGRATIONS, AdventureState, advRepo, ATTRIBUTES, DEFAULT_ATTRIBUTES, fameLabel, fameLabelIn, MAX_LEVEL, practiceFor, SKILL_ATTR, SKILLS, xpForNext,
+  type Injury, type Item, type Profile, type Skill,
 } from './state.ts';
 
 // ============================================================================
@@ -48,6 +50,29 @@ function condition(p: Profile): string {
 }
 function addDeed(p: Profile, deed: string) { p.deeds = [...p.deeds, deed].slice(-4); }
 
+/** The attribute behind a skill shifts every check: 2 is average (±0), 5 is +1.5, 1 is −0.5. */
+function attrBonus(p: Profile, skill: string): number {
+  const attr = SKILL_ATTR[skill as Skill];
+  return attr ? ((p.attributes[attr] ?? 2) - 2) * 0.5 : 0;
+}
+
+type CheckOutcome = 'success' | 'partial' | 'failure';
+/** One uncertain act: skill + attribute − difficulty + a bounded seeded roll. */
+function check(api: WorldPlanner, p: Profile, skill: string, difficulty: number, label: string, opposed = 0): { outcome: CheckOutcome; margin: number } {
+  const margin = skillLevel(p, skill) + attrBonus(p, skill) - difficulty - opposed + api.random(`check:${label}`) * 8 - 3;
+  return { outcome: margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure', margin };
+}
+
+/** Experience: rolled from what was done (base ±25%); levels give points to spend on the sheet and a little more health. */
+function gainXp(api: WorldPlanner, p: Profile, base: number, label: string): string {
+  if (base <= 0 || p.characterId !== api.ctx.player.id) return '';
+  const amount = Math.max(1, Math.round(base * (0.75 + api.random(`xp:${label}`) * 0.5)));
+  p.xp += amount;
+  let ups = 0;
+  while (p.xp >= xpForNext(p.level)) { p.xp -= xpForNext(p.level); p.level++; p.points++; p.maxHealth += 5; p.health += 5; ups++; }
+  return ` · ✨ +${amount} XP${ups ? ` · ⬆ LEVEL ${p.level}! +${ups} point${ups > 1 ? 's' : ''} to spend (/sheet, /spend <skill or attribute>)` : ''}`;
+}
+
 const OUTCOMES = ['decisive', 'win_hurt', 'stalemate', 'lose', 'crushing'] as const;
 type PlayerIntent = 'kill' | 'subdue' | 'drive_off' | 'defend' | 'duel';
 type FoeIntent = 'kill' | 'hurt' | 'humiliate' | 'drive_off';
@@ -69,9 +94,9 @@ function resolveFight(api: WorldPlanner, f: {
   const weapon = f.weaponName ? st(api).findItem(me, f.weaponName) : f.aggressor === 'npc' ? st(api).best(me, 'weapon') : undefined;
   if (f.weaponName && !weapon) return { error: `You don't have "${f.weaponName}".` };
   const armor = st(api).best(me, 'armor');
-  const mine = skillLevel(player, 'combat') + (weapon?.kind === 'weapon' ? 1 + weapon.quality : 0) + (armor ? 0.5 + armor.quality * 0.5 : 0)
+  const mine = skillLevel(player, 'combat') + attrBonus(player, 'combat') + (weapon?.kind === 'weapon' ? 1 + weapon.quality : 0) + (armor ? 0.5 + armor.quality * 0.5 : 0)
     - (player.health < 25 ? 2 : player.health < 50 ? 1 : 0) - (f.aggressor === 'npc' ? 0.5 : 0); // caught first
-  const theirs = foe ? skillLevel(foe, 'combat') + 1.5 - (foe.health < 40 ? 1 : 0) : f.threat * 1.3;
+  const theirs = foe ? skillLevel(foe, 'combat') + attrBonus(foe, 'combat') + 1.5 - (foe.health < 40 ? 1 : 0) : f.threat * 1.3;
   const roll = api.random(`fight:${f.opponent}`) * 10 - 5;
   const margin = mine - theirs + roll;
   const outcome: (typeof OUTCOMES)[number] = margin >= 4 ? 'decisive' : margin >= 1 ? 'win_hurt' : margin >= -1.5 ? 'stalemate' : margin >= -5 ? 'lose' : 'crushing';
@@ -97,7 +122,7 @@ function resolveFight(api: WorldPlanner, f: {
     return `${who} beats you down completely — you are at their mercy`;
   })();
   const label = playerDied ? 'death' : { decisive: 'decisive victory', win_hurt: 'victory, but it cost you', stalemate: 'stalemate', lose: 'defeat', crushing: 'crushing defeat' }[outcome];
-  const lvl = playerDied ? null : practise(player, 'combat', outcome === 'decisive' || outcome === 'win_hurt' ? 2 : 1);
+  const xp = playerDied ? '' : gainXp(api, player, f.threat * { decisive: 15, win_hurt: 12, stalemate: 6, lose: 4, crushing: 3 }[outcome], `fight:${f.opponent}`);
   let fame = '';
   if (!playerDied && f.witnessed && (outcome === 'decisive' || outcome === 'win_hurt')) {
     const gain = f.threat >= 4 || named ? 2 : 1;
@@ -112,7 +137,7 @@ function resolveFight(api: WorldPlanner, f: {
   const head = f.aggressor === 'npc' ? `⚔ ${who} attack${/\b(guards|men|crew|they)\b|s$/i.test(who) ? '' : 's'} you${lethal ? ' to kill' : ''}` : `⚔ Fight — ${who}`;
   const line = playerDied
     ? `${head}: ${who} kills you. You took ${wound}. ☠ ${api.ctx.player.name} is dead.`
-    : `${head}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${lvl ? ` ${lvl}` : ''}${fame}`;
+    : `${head}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${fame}${xp}`;
   api.results.push(line);
   api.witnessed.push(`${f.aggressor === 'npc' ? `${who} attacked ${api.ctx.player.name} (${f.foeIntent})` : `${api.ctx.player.name} fought ${who} (${f.playerIntent}${weapon ? `, with ${weapon.name}` : ', bare-handed'})`}: ${label}; ${foeLine}${wound ? `; ${api.ctx.player.name} took ${wound}` : ''}.`);
   const observers = [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])];
@@ -120,12 +145,12 @@ function resolveFight(api: WorldPlanner, f: {
     [{ characterId: me, role: 'actor' }, ...(named ? [{ characterId: named.id, role: 'actor' as const }] : [])], playerDied ? 5 : 4);
 
   // What the player did will come back to them — sooner and harder the worse it was, the more important the victim, the more who saw it.
-  if (f.aggressor === 'player' && !playerDied && outcome !== 'stalemate') {
+  if (f.aggressor === 'player' && !playerDied && (outcome !== 'stalemate' || f.guarding)) {
     const where = api.ctx.location;
     const seen = f.witnessed ? ' in front of witnesses' : '';
     const won = outcome === 'decisive' || outcome === 'win_hurt';
     const victim = named ? `${named.name} (${named.role})` : who;
-    if (f.guarding && !won) api.consequence(`${api.ctx.player.name} attacked ${f.guarding} and was stopped by ${who}${seen} at ${where}; ${api.ctx.player.name} is at their mercy.`, 10);
+    if (f.guarding && !won) api.consequence(`${api.ctx.player.name} attacked ${f.guarding} and was stopped by ${who}${seen} at ${where}${outcome === 'stalemate' ? '' : `; ${api.ctx.player.name} is at their mercy`}.`, 10);
     else if (won && f.playerIntent === 'kill' && named) api.consequence(`${api.ctx.player.name} killed ${victim}${seen} at ${where}.`, f.witnessed ? 60 + api.random('conseq') * 120 : 12 * 60 + api.random('conseq') * 36 * 60);
     else if (won && f.playerIntent === 'kill') { if (f.witnessed) api.consequence(`${api.ctx.player.name} killed ${victim}${seen} at ${where}.`, 3 * 60 + api.random('conseq') * 6 * 60); }
     else if (won && named) api.consequence(`${api.ctx.player.name} beat ${victim}${seen} at ${where}.`, 24 * 60 + api.random('conseq') * 48 * 60);
@@ -178,26 +203,136 @@ const actions: PackAction[] = [
       action: z.literal('attempt'), feat: z.string().min(3).max(200), skill: z.enum(SKILLS), difficulty: z.number(),
       risk: z.enum(['none', 'injury', 'caught', 'loss']),
     }),
-    doc: `attempt: a risky feat whose outcome is uncertain (climbing, sneaking past guards, persuading a hostile official, surviving a storm). skill one of ${SKILLS.join('/')}; difficulty 1 (easy) … 5 (near impossible) — honest; risk = what failure costs. The game decides success.`,
+    doc: `attempt: a risky feat whose outcome is uncertain — climbing, sneaking or hiding (stealth, risk caught), picking a lock, tracking, spotting something hidden (perception), surviving a storm, recalling lore. skill one of ${SKILLS.join('/')}; difficulty 1 (easy) … 5 (near impossible) — honest; risk = what failure costs. The game decides success.`,
     handle: (api, a) => {
       const me = api.ctx.player.id;
       const p = profile(api, me);
       const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
-      const margin = skillLevel(p, String(a.skill)) - diff + api.random(`attempt:${a.feat}`) * 8 - 3;
-      const outcome = margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure';
+      const { outcome } = check(api, p, String(a.skill), diff, `attempt:${a.feat}`);
       let cost = '';
       if (outcome !== 'success' && a.risk === 'injury') {
         const amount = outcome === 'failure' ? 15 + Math.round(api.random(`attempt:${a.feat}:d`) * 15) : 5 + Math.round(api.random(`attempt:${a.feat}:d`) * 8);
         cost = ` You took ${hurt(api, p, amount, `attempt:${a.feat}`)} (−${amount}; ${p.health}/${p.maxHealth}).`;
-      } else if (outcome === 'failure' && a.risk !== 'none') {
-        cost = a.risk === 'caught' ? ' You were seen.' : ' It cost you something.';
+      } else if (outcome === 'failure' && a.risk === 'caught') {
+        cost = ' You were seen.';
+        api.consequence(`${api.ctx.player.name} was caught trying to ${a.feat} at ${api.ctx.location}.`, 5 + api.random(`attempt:${a.feat}:c`) * 40);
+      } else if (outcome === 'partial' && a.risk === 'caught') {
+        // It looked clean. It wasn't: someone saw, and the player doesn't know.
+        api.consequence(`Someone saw ${api.ctx.player.name} ${a.feat} at ${api.ctx.location} — ${api.ctx.player.name} does not know they were seen.`, 2 * 60 + api.random(`attempt:${a.feat}:c`) * 22 * 60);
+      } else if (outcome === 'failure' && a.risk === 'loss') {
+        cost = ' It cost you something.';
       }
-      const lvl = practise(p, String(a.skill), outcome === 'success' ? 1 : 1);
+      const xp = gainXp(api, p, diff * { success: 8, partial: 4, failure: 2 }[outcome], `attempt:${a.feat}`);
       st(api).touch(p, api.ctx.now);
-      const label = { success: 'success', partial: 'partly — it works, but not cleanly', failure: 'failure' }[outcome];
-      api.results.push(`🎲 ${a.feat} (${a.skill}, difficulty ${diff}): ${label}.${cost}${lvl ? ` ${lvl}` : ''}`);
+      const shown = outcome === 'partial' && a.risk === 'caught' ? 'success' : outcome; // a hidden witness is not shown
+      const label = { success: 'success', partial: 'partly — it works, but not cleanly', failure: 'failure' }[shown];
+      api.results.push(`🎲 ${a.feat} (${a.skill}, difficulty ${diff}): ${label}.${cost}${xp}`);
       api.witnessed.push(`${api.ctx.player.name} tried to ${a.feat}: ${label}.`);
-      api.event('feat', `${api.ctx.player.name} tried to ${a.feat}: ${label}.`, [me, ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 2);
+      api.event('feat', `${api.ctx.player.name} tried to ${a.feat}: ${outcome}.`, [me, ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 2);
+      return null;
+    },
+  },
+  {
+    name: 'steal',
+    schema: z.strictObject({
+      action: z.literal('steal'), what: z.string().min(2).max(120), from: z.string().min(2).max(120), value: z.number(),
+      kind: z.enum(['money', 'weapon', 'armor', 'gear', 'valuable']), quality: z.number(), difficulty: z.number(),
+    }),
+    doc: 'steal: the player tries to take something that is not theirs now (a purse, a blade, a ledger). from = exact name of a known person, or the place/owner; value = honest worth in money (for money: the amount); kind; quality 0–3 for items; difficulty 1–5 (watchfulness, guards, light, crowd). The game decides — the player may be caught, or seen without knowing it.',
+    handle: (api, a) => {
+      const me = api.ctx.player.id;
+      const p = profile(api, me);
+      const victim = api.findCharacter(String(a.from));
+      const named = victim && victim.id !== me ? victim : undefined;
+      if (named?.status === 'dead') return api.reject(a, `${named.name} is dead — that is looting, not theft.`), null;
+      const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
+      const watcher = named ? skillLevel(profile(api, named.id), 'perception') * 0.5 : 0;
+      const { outcome } = check(api, p, 'stealth', diff, `steal:${a.what}`, watcher);
+      const who = named?.name ?? String(a.from);
+      const xp = gainXp(api, p, diff * { success: 10, partial: 6, failure: 2 }[outcome], `steal:${a.what}`);
+      st(api).touch(p, api.ctx.now);
+      if (outcome === 'failure') {
+        api.results.push(`✋ Caught trying to steal ${a.what} from ${who}.${xp}`);
+        api.witnessed.push(`${api.ctx.player.name} tried to steal ${a.what} from ${who} and was caught in the act.`);
+        api.event('crime', `${api.ctx.player.name} was caught trying to steal ${a.what} from ${who}.`, [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 4);
+        if (!named || !api.inConversation(named.id)) api.consequence(`${api.ctx.player.name} was caught stealing ${a.what} from ${who} at ${api.ctx.location}.`, 5 + api.random(`steal:${a.what}:c`) * 30);
+        return null;
+      }
+      const cents = Math.max(0, Math.round(Number(a.value) * 100));
+      if (a.kind === 'money') {
+        if (named) api.payBetween(named.id, me, cents, `stolen: ${a.what}`, 'theft'); else api.move(null, api.ensureAccount('character', me), cents, `stolen: ${a.what}`, 'theft');
+      } else {
+        st(api).addItem({ id: newId('item'), gameId: api.ctx.gameId, ownerId: me, name: String(a.what), kind: a.kind as Item['kind'],
+          quality: clamp(Math.round(Number(a.quality)), 0, 3), quantity: 1, createdAt: api.ctx.now });
+      }
+      // Success is clean. A partial success looks the same to the player — but someone saw.
+      api.results.push(`🤏 You take ${a.what} from ${who} and slip away${a.kind === 'money' && cents ? ` (+${api.money(cents)})` : ''}.${xp}`);
+      api.event('crime', `${api.ctx.player.name} stole ${a.what} from ${who}${outcome === 'partial' ? ' — and was seen' : ''}.`, [me], [{ characterId: me, role: 'actor' }], 3);
+      if (outcome === 'partial') {
+        api.consequence(`${named ? named.name : 'Someone'} ${named ? 'noticed' : 'saw'} ${api.ctx.player.name} steal ${a.what} from ${who} at ${api.ctx.location}. ${api.ctx.player.name} thinks they got away clean.`, 60 + api.random(`steal:${a.what}:c`) * 36 * 60);
+      }
+      return null;
+    },
+  },
+  {
+    name: 'deceive',
+    schema: z.strictObject({ action: z.literal('deceive'), target: z.string().min(2).max(80), claim: z.string().min(3).max(300), difficulty: z.number() }),
+    doc: 'deceive: the player tries to make someone present believe something false — a lie, a bluff, a false promise, a disguise, a forged token. Use it whenever the player\'s words are meant to mislead (even if the player doesn\'t say "I lie"). target = exact name; claim = what they are meant to believe; difficulty 1 (plausible) … 5 (absurd, or they have reason to know better). The game rolls it against the target\'s perception.',
+    handle: (api, a) => {
+      const me = api.ctx.player.id;
+      const target = api.findCharacter(String(a.target));
+      if (!target || target.id === me) return `deceive: unknown person "${a.target}"`;
+      if (!api.inConversation(target.id)) return api.reject(a, `${target.name} isn't here to be deceived.`), null;
+      const p = profile(api, me);
+      const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
+      const them = profile(api, target.id);
+      const { outcome } = check(api, p, 'deception', diff * 0.8, `deceive:${a.claim}`, skillLevel(them, 'perception') + attrBonus(them, 'perception'));
+      const xp = gainXp(api, p, diff * { success: 8, partial: 4, failure: 2 }[outcome], `deceive:${a.claim}`);
+      st(api).touch(p, api.ctx.now);
+      const verdict = { success: `${target.name} believes you`, partial: `${target.name} has doubts but goes along — for now`, failure: `${target.name} sees through it` }[outcome];
+      api.results.push(`🎭 Deception — "${a.claim}": ${verdict}.${xp}`);
+      api.witnessed.push(outcome === 'success' ? `${api.ctx.player.name} told you: "${a.claim}". You BELIEVE it.`
+        : outcome === 'partial' ? `${api.ctx.player.name} told you: "${a.claim}". You are not sure it is true, but you go along with it for now.`
+        : `${api.ctx.player.name} told you: "${a.claim}". You can tell it is a lie.`);
+      api.event('deception', `${api.ctx.player.name} tried to make ${target.name} believe: ${a.claim} (${outcome}).`, [me], [{ characterId: me, role: 'actor' }], 2);
+      // Lies that work can still unravel later.
+      if (outcome !== 'failure' && api.random(`deceive:${a.claim}:unravel`) < (outcome === 'partial' ? 0.6 : 0.3)) {
+        api.consequence(`${target.name} finds out that ${api.ctx.player.name} lied to them: "${a.claim}".`, 24 * 60 + api.random(`deceive:${a.claim}:when`) * 5 * 24 * 60);
+      }
+      return null;
+    },
+  },
+  {
+    name: 'influence',
+    schema: z.strictObject({
+      action: z.literal('influence'), target: z.string().min(2).max(80), approach: z.enum(['persuade', 'intimidate', 'charm', 'bribe']),
+      goal: z.string().min(3).max(200), difficulty: z.number(), bribe: z.number().nullable(),
+    }),
+    doc: 'influence: the player tries to move someone present — persuade (reasons), intimidate (fear), charm (warmth), bribe (money: bribe = amount). goal = what they want from them; difficulty 1–5 (how much it asks of them). The game rolls it; the person then acts on the result in their own way.',
+    handle: (api, a) => {
+      const me = api.ctx.player.id;
+      const target = api.findCharacter(String(a.target));
+      if (!target || target.id === me) return `influence: unknown person "${a.target}"`;
+      if (!api.inConversation(target.id)) return api.reject(a, `${target.name} isn't here.`), null;
+      const p = profile(api, me);
+      let bonus = 0;
+      if (a.approach === 'bribe') {
+        const cents = Math.round(Number(a.bribe ?? 0) * 100);
+        if (cents <= 0) return 'influence: a bribe needs an amount';
+        if (!api.payBetween(me, target.id, cents, `bribe to ${target.name}`, 'bribe')) return null;
+        bonus = Math.min(2, cents / 5000);
+      }
+      if (a.approach === 'intimidate') bonus += attrBonus(p, 'combat') + Math.min(1.5, p.fame / 6);
+      const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
+      const them = profile(api, target.id);
+      const { outcome } = check(api, p, 'persuasion', diff - bonus, `influence:${a.goal}`, (skillLevel(them, 'perception') + attrBonus(them, 'perception')) * 0.5);
+      const xp = gainXp(api, p, diff * { success: 8, partial: 4, failure: 2 }[outcome], `influence:${a.goal}`);
+      st(api).touch(p, api.ctx.now);
+      const verb = { persuade: 'persuaded', intimidate: 'frightened', charm: 'won over', bribe: 'bought' }[a.approach as 'persuade'];
+      const verdict = { success: `${target.name} is ${verb}`, partial: `${target.name} wavers`, failure: `${target.name} is not moved${a.approach === 'intimidate' ? ' — and resents the threat' : ''}` }[outcome];
+      const how = String(a.approach);
+      api.results.push(`🗣 ${how[0]!.toUpperCase()}${how.slice(1)} ${target.name} (${a.goal}): ${verdict}.${xp}`);
+      api.witnessed.push(`${api.ctx.player.name} tried to ${a.approach} you (${a.goal}): ${outcome === 'success' ? `it WORKED — you are ${verb}; act on it` : outcome === 'partial' ? 'you waver; you might give a little' : 'it did not work on you'}.`);
       return null;
     },
   },
@@ -278,9 +413,71 @@ const actions: PackAction[] = [
 function playerLines(api: WorldPlanner): string[] {
   const me = api.ctx.player.id;
   const p = profile(api, me);
-  const skills = SKILLS.map((s) => `${s} ${skillLevel(p, s)}`).join(', ');
+  const skills = `${ATTRIBUTES.map((x) => `${x} ${p.attributes[x] ?? 2}`).join(', ')} · level ${p.level} · ${SKILLS.map((s) => `${s} ${skillLevel(p, s)}`).join(', ')}`;
   const gear = st(api).itemsOf(me).map((i) => `${i.name} (${QUALITY[i.quality]} ${i.kind}${i.quantity > 1 ? ` ×${i.quantity}` : ''})`).join(', ');
-  return [`Condition: ${condition(p)}`, `Skills (0–5): ${skills}`, `Carrying: ${gear || 'nothing of note'}`, `Reputation: ${fameLabel(p.fame)}${p.deeds.length ? ` — people talk about how ${api.ctx.player.name} ${p.deeds.join('; ')}` : ''}`];
+  return [`Condition: ${condition(p)}`, `Attributes (1–5), level and skills (0–5): ${skills}`, `Carrying: ${gear || 'nothing of note'}`, `Reputation: ${fameLabel(p.fame)}${p.deeds.length ? ` — people talk about how ${api.ctx.player.name} ${p.deeds.join('; ')}` : ''}`];
+}
+
+const SHEET_PT: Record<string, string> = {
+  strength: 'força', agility: 'agilidade', wits: 'astúcia', presence: 'presença', combat: 'combate', stealth: 'furtividade', athletics: 'atletismo',
+  survival: 'sobrevivência', perception: 'percepção', persuasion: 'persuasão', deception: 'enganação', lore: 'conhecimento',
+};
+
+/** The character sheet (a read-only view of canonical state). */
+export function characterSheet(store: Store, gameId: string, lang: 'en' | 'pt' = 'en'): string {
+  const game = store.getGame(gameId)!;
+  const me = store.getCharacter(game.playerCharacterId)!;
+  const p = advRepo.profile(store, me.id);
+  if (!p) return '(no character sheet)';
+  const pt = lang === 'pt';
+  const L = (k: string) => (pt ? SHEET_PT[k] ?? k : k);
+  const bar = (n: number, max = 5) => '●'.repeat(n) + '○'.repeat(Math.max(0, max - n));
+  const seed = store.getWorldSeed<{ player: { ambition: string | null } }>(gameId);
+  const cash = store.getAccountOf(gameId, 'character', me.id)?.balanceCents ?? 0;
+  const items = advRepo.items(store, gameId).filter((i) => i.ownerId === me.id);
+  const sym = (store.getWorldSeed<{ player: { currency: { symbol: string } | null } }>(gameId)?.player.currency?.symbol) ?? '¤';
+  const lines = [
+    `══ ${me.name.toUpperCase()} — ${pt ? 'Nível' : 'Level'} ${p.level} · XP ${p.xp}/${xpForNext(p.level)}${p.points ? ` · ${p.points} ${pt ? 'ponto(s) para gastar' : `point${p.points > 1 ? 's' : ''} to spend`} (/spend)` : ''} ══`,
+    `${pt ? 'Vida' : 'Health'} ${p.health}/${p.maxHealth}${p.injuries.length ? ` — ${p.injuries.map((i) => i.text).join(', ')}` : ''}`,
+    '',
+    `${pt ? 'ATRIBUTOS' : 'ATTRIBUTES'}  ${ATTRIBUTES.map((x) => `${L(x)} ${bar(p.attributes[x] ?? 2)}`).join('   ')}`,
+    `${pt ? 'PERÍCIAS' : 'SKILLS'}`,
+    ...SKILLS.map((s) => {
+      const k = p.skills[s] ?? { level: 0, practice: 0 };
+      return `  ${L(s).padEnd(14)} ${bar(k.level)}  ${k.practice ? `(${pt ? 'treino' : 'practice'} ${k.practice}/${practiceFor(k.level)})` : ''}`.trimEnd();
+    }),
+    '',
+    `${pt ? 'EQUIPAMENTO' : 'GEAR'}  ${items.map((i) => `${i.name} (${QUALITY[i.quality]} ${i.kind}${i.quantity > 1 ? ` ×${i.quantity}` : ''})`).join(' · ') || '—'}`,
+    `${pt ? 'DINHEIRO' : 'MONEY'}  ${sym}${(cash / 100).toFixed(2)}`,
+    `${pt ? 'REPUTAÇÃO' : 'REPUTATION'}  ${fameLabelIn(p.fame, lang)} (${p.fame})${p.deeds.length ? ` — ${p.deeds.join('; ')}` : ''}`,
+    ...(seed?.player.ambition ? [`${pt ? 'AMBIÇÃO' : 'AMBITION'}  ${seed.player.ambition}`] : []),
+  ];
+  return lines.join('\n');
+}
+
+/** Spends unspent points: a skill costs 1 (max 5), an attribute costs 3 (max 5). */
+export function spendPoint(store: Store, gameId: string, what: string): string {
+  const game = store.getGame(gameId)!;
+  const p = advRepo.profile(store, game.playerCharacterId);
+  if (!p) return '(no character sheet)';
+  const key = Object.entries(SHEET_PT).find(([en, ptName]) => en === what.toLowerCase() || ptName === what.toLowerCase())?.[0] ?? what.toLowerCase();
+  const isSkill = (SKILLS as readonly string[]).includes(key);
+  const isAttr = (ATTRIBUTES as readonly string[]).includes(key);
+  if (!isSkill && !isAttr) return `Spend on a skill (${SKILLS.join(', ')}) or an attribute (${ATTRIBUTES.join(', ')}).`;
+  const cost = isSkill ? 1 : 3;
+  if (p.points < cost) return `You have ${p.points} point${p.points === 1 ? '' : 's'}; ${key} costs ${cost}.`;
+  if (isSkill) {
+    const s = (p.skills[key] ??= { level: 0, practice: 0 });
+    if (s.level >= MAX_LEVEL) return `${key} is already at ${MAX_LEVEL}.`;
+    s.level++;
+  } else {
+    if ((p.attributes[key] ?? 2) >= 5) return `${key} is already at 5.`;
+    p.attributes[key] = (p.attributes[key] ?? 2) + 1;
+  }
+  p.points -= cost;
+  p.updatedAt = new Date().toISOString();
+  advRepo.saveProfile(store, p);
+  return `✓ ${key} → ${isSkill ? p.skills[key]!.level : p.attributes[key]} · ${p.points} point${p.points === 1 ? '' : 's'} left`;
 }
 
 export const adventurePack: GamePack = {
@@ -293,7 +490,7 @@ export const adventurePack: GamePack = {
     guidance: [
       'Adventure mechanics: the game resolves fights and risky feats from skills (0–5), weapons/armour and wounds; health and injuries; skills grow with practice;',
       'fame grows with witnessed deeds and people hear of it. Good for fantasy, science-fantasy, a known universe used as reference (Dune-like, etc.).',
-      `Ask for the player's AMBITION (what they dream of becoming) and set player.attributes with starting skill levels: ${SKILLS.join(', ')} (0–5, most 0–2 at the start), plus fame (usually 0).`,
+      `Ask for the player's AMBITION (what they dream of becoming) and build their sheet in player.attributes: attributes ${ATTRIBUTES.join(', ')} (1–5, 2 is average), skills ${SKILLS.join(', ')} (0–5, most 0–2 at the start), plus fame (usually 0). Fit the sheet to the backstory.`,
       'Starting gear goes in player.assets with kind weapon/armor/gear/valuable and metrics quality (0–3) and quantity. Suggest pace eventful, narration literary, and ask how violence should be shown.',
       'Start in the middle of the world: a place with danger nearby, a few people who matter (a teacher, a rival, someone the player owes), and 2–3 open leads with dates.',
     ].join('\n'),
@@ -312,7 +509,8 @@ export const adventurePack: GamePack = {
       advRepo.saveProfile(store, {
         characterId: player.id, gameId, health: 100, maxHealth: 100, injuries: [], fame: Math.max(0, Math.round(attrs.fame ?? 0)), deeds: [],
         skills: Object.fromEntries(SKILLS.map((s) => [s, { level: clamp(Math.round(attrs[s] ?? 0), 0, MAX_LEVEL), practice: 0 }])),
-        createdAt: now, updatedAt: now,
+        attributes: Object.fromEntries(ATTRIBUTES.map((x) => [x, clamp(Math.round(attrs[x] ?? DEFAULT_ATTRIBUTES[x]), 1, 5)])),
+        xp: 0, level: 1, points: 0, createdAt: now, updatedAt: now,
       });
       for (const a of seed.player.assets.filter((x) => ['weapon', 'armor', 'gear', 'valuable'].includes(x.kind))) {
         const m = Object.fromEntries(a.metrics.map((x) => [x.key, x.value]));
@@ -329,6 +527,10 @@ export const adventurePack: GamePack = {
     // Others acting for them (guards, crew, hired men) fight as an unnamed group; otherwise they strike themselves.
     if (attack.by) resolveFight(api, { opponent: `${attack.by} (for ${named.name})`, threat, playerIntent: 'defend', foeIntent: attack.intent, weaponName: null, witnessed: true, aggressor: 'npc' });
     else resolveFight(api, { opponent: named.name, named, threat, playerIntent: 'defend', foeIntent: attack.intent, weaponName: null, witnessed: true, aggressor: 'npc' });
+  },
+  commands: {
+    sheet: { help: 'your character sheet', run: (store, gameId, _args, lang) => characterSheet(store, gameId, lang) },
+    spend: { help: 'spend a point: /spend <skill> (1 point) or /spend <attribute> (3 points)', run: (store, gameId, args) => spendPoint(store, gameId, args[0] ?? '') },
   },
   weekly(api) {
     const p = profile(api, api.ctx.player.id);

@@ -49,6 +49,11 @@ const interpretFields = {
   narration: z.string().max(1500),
   clarificationQuestion: z.string().max(400).nullable(),
   suggestions: z.array(z.string().min(3).max(160)).max(3),
+  /** Socially significant things the player did this turn that people may remember and act on later. */
+  deeds: z.array(z.object({
+    what: z.string().min(3).max(200), against: z.string().max(80).nullable(), severity: z.number().int().min(1).max(5),
+    tone: z.enum(['harm', 'kindness']), public: z.boolean(),
+  })).max(3),
 };
 
 /** Call 1 — player perspective. The action union = core actions + the pack's actions. */

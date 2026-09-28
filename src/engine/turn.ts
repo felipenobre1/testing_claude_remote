@@ -314,6 +314,13 @@ export class Engine {
         economy.results.push(`✗ Couldn't do that (${err}).`);
       }
     }
+    // Deeds people saw: the world secretly decides whether (and when) someone acts on them.
+    for (const d of interp.deeds ?? []) {
+      const present = new Set([...(interaction?.participantIds ?? []), ...scene.activeCharacterIds].filter((id) => id !== player.id));
+      const target = d.against ? findByName(economy.ctx.characters, d.against)[0] : undefined;
+      if (target && target.id !== player.id && interaction?.participantIds.includes(target.id)) present.add(target.id); // a message/phone target knows too
+      economy.deed(d, [...present].map((id) => economy.name(id)));
+    }
     const playerResultCount = economy.results.length;
 
     // 4. Player-side events. Private thoughts are observed by the player alone.

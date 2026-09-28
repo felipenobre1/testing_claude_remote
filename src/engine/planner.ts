@@ -218,6 +218,22 @@ export class WorldPlanner {
   consequence(summary: string, dueInMinutes: number) {
     this.schedule(addMinutes(this.ctx.gameTime, Math.max(0, Math.round(dueInMinutes))), 'consequence', { summary });
   }
+  /**
+   * A deed people saw. Whether and when they act on it is decided now, secretly (the player finds out when it happens):
+   * the worse (or better) it was, the likelier and sooner.
+   */
+  deed(d: { what: string; against: string | null; severity: number; tone: 'harm' | 'kindness'; public: boolean }, witnesses: string[]) {
+    if (!witnesses.length && !d.public) return; // nobody saw it
+    const sev = Math.max(1, Math.min(5, Math.round(d.severity)));
+    const chance = [0, 0.1, 0.35, 0.65, 0.9, 1][sev]!;
+    const key = `deed:${d.what}`;
+    if (this.random(`${key}:happens`) >= chance) return;
+    const window: [number, number] = ([[0, 0], [72, 240], [48, 168], [24, 72], [6, 24], [1, 6]] as [number, number][])[sev]!;
+    const hours = window[0] + this.random(`${key}:when`) * (window[1] - window[0]);
+    const seen = [...witnesses, ...(d.public ? ['bystanders'] : [])].join(', ');
+    this.consequence(`${this.ctx.player.name} ${d.what}${d.against ? ` (to ${d.against})` : ''} at ${this.ctx.location} — seen by ${seen}. `
+      + (d.tone === 'harm' ? 'Someone who saw it, or was wronged, acts on it: reports it, spreads it, or takes revenge.' : 'Someone who saw it repays it, or speaks well of them.'), hours * 60);
+  }
   schedule(dueGameTime: string, kind: string, payload: Record<string, unknown>, threadId: string | null = null) {
     const item: ScheduledItem = {
       id: newId('sch'), gameId: this.ctx.gameId, dueGameTime, kind, payload, threadId, status: 'pending', createdGameTime: this.ctx.gameTime, createdAt: this.ctx.now,

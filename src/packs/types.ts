@@ -68,6 +68,8 @@ export interface GamePack {
   };
   /** Someone attacks the player (from a conversation or a scene beat). The pack resolves it; without this hook, attacks are words only. */
   npcAttack?(api: WorldPlanner, attackerId: string, attack: NpcAttack): void;
+  /** Player commands outside the story (e.g. /sheet, /spend): read or adjust the player's own sheet. Not world actions. */
+  commands?: Record<string, { help: string; run(store: Store, gameId: string, args: string[], lang: 'en' | 'pt'): string }>;
   /** Once per game week while time passes (Monday 08:00): pack dynamics; returns lines for the weekly report. */
   weekly?(api: WorldPlanner, weekStart: string, weekEnd: string): string[];
   offerKinds: OfferKindDef[];

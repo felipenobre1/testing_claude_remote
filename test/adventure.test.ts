@@ -48,7 +48,7 @@ test('fights are decided by the engine: skill, gear, a bounded roll; a killed pe
   const r = await s.turn('I draw my knife and go for Kesh\'s throat', { intents: ['general_action'], minutesElapsed: 2, narration: 'Steel.',
     actions: [fight('Kesh Adar')] });
   assert.match(r.text, /⚔ Fight — Kesh Adar: decisive victory\. Kesh Adar is dead\. You took a cut to the leg \(−6; 94\/100\)\. · fame \+2 \(known around here\)/);
-  assert.deepEqual(s.me().skills.combat, { level: 2, practice: 2 }); // practice toward level 3
+  assert.ok(s.me().xp > 0); // fighting gives experience
   assert.equal(s.char('Kesh Adar').status, 'dead');
   assert.equal(s.me().fame, 3);
   assert.match(s.me().deeds.join(), /killed Kesh Adar in front of witnesses/);
@@ -90,8 +90,8 @@ test('whoever is in the scene witnesses the fight: the NPC\'s reaction must be c
 test('feats, rest, training and gear', async () => {
   const s = start({ roll: 0.5 });
   const climb = await s.turn('I climb the cistern wall', { intents: ['general_action'], minutesElapsed: 10, narration: '',
-    actions: [{ action: 'attempt', feat: 'climb the cistern wall at night', skill: 'athletics', difficulty: 2, risk: 'injury' }] });
-  assert.match(climb.text, /🎲 climb the cistern wall at night \(athletics, difficulty 2\): partly — it works, but not cleanly\. You took a cut to the/);
+    actions: [{ action: 'attempt', feat: 'climb the cistern wall at night', skill: 'athletics', difficulty: 4, risk: 'injury' }] });
+  assert.match(climb.text, /🎲 climb the cistern wall at night \(athletics, difficulty 4\): partly — it works, but not cleanly\. You took a cut to the/);
   const train = await s.turn('I train with Oda all day', { intents: ['general_action'], minutesElapsed: 600, narration: '',
     actions: [{ action: 'train', skill: 'combat', hours: 14, teacherName: 'Oda Venn' }] });
   assert.match(train.text, /🏋 Trained combat with Oda Venn: ⬆ combat is now 3/);
@@ -249,12 +249,12 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   const prose = 'O bandido avança; a faca do seu pai encontra o braço dele, e ele foge pelo beco.';
   llm.enqueue('interpret', fightTurn)
     .enqueue('narrate',
-      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100).'] }, // wrong number
+      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100). · ✨ +38 XP'] }, // wrong number
       { prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'],
-        lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100).'] });
+        lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100). · ✨ +38 XP'] });
   const r = await engine.takeTurn({ gameId: game.id, input: 'enfrento o bandido' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.equal(r.text, `${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100).`);
+  assert.equal(r.text, `${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100). · ✨ +38 XP`);
   assert.deepEqual(r.suggestions, ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve']); // the narrator's, not the interpreter's
   assert.match(r.results[0]!, /^⚔ Fight — um bandido de beco: decisive victory/); // the record stays English
   const calls = llm.callsFor('narrate');
@@ -381,7 +381,7 @@ test('attacking a guarded lord: the guards stand in the way, and what you did co
     actions: [fight('Lord Varr', { threat: 2, intent: 'kill', guards: { who: 'four House Varr guards in lamellar', threat: 5 } })] }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I rush the lord with my knife' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.match(r.text, /⚔ Fight — four House Varr guards in lamellar: (defeat|crushing defeat)[\s\S]*You never reach Lord Varr\./);
+  assert.match(r.text, /⚔ Fight — four House Varr guards in lamellar: (stalemate|defeat|crushing defeat)[\s\S]*You never reach Lord Varr\./);
   // The world will answer: an arrest (or worse) is scheduled within minutes.
   const due = s.store.listScheduled(s.game.id, 'pending').find((i) => i.kind === 'consequence')!;
   assert.match(String(due.payload.summary), /Rhen attacked Lord Varr and was stopped by four House Varr guards in lamellar in front of witnesses/);
@@ -416,5 +416,89 @@ test('a lord has others do it: an attack by his guards is a fight with the guard
   assert.match(r.text, /⚔ her two guards \(for Sarai Tul\) attack you: /);
   assert.equal(s.char('Sarai Tul').status, 'alive');
   assert.ok(s.me().health >= 1);
+  s.store.close();
+});
+
+test('stealing: clean, seen without knowing it, or caught', async () => {
+  const steal = { action: 'steal', what: 'a purse of drams', from: 'a spice merchant', value: 12, kind: 'money', quality: 0, difficulty: 2 };
+  const clean = start({ roll: 1 });
+  const r1 = await clean.turn('I lift the merchant\'s purse', { intents: ['general_action'], minutesElapsed: 5, narration: '', actions: [steal] });
+  assert.match(r1.text, /🤏 You take a purse of drams from a spice merchant and slip away \(\+dr 12\.00\)\./);
+  assert.ok(!clean.store.listScheduled(clean.game.id, 'pending').some((i) => i.kind === 'consequence'));
+  clean.store.close();
+
+  const seen = start({ roll: 0.5 }); // partial: looks exactly the same to the player…
+  const r2 = await seen.turn('I lift the merchant\'s purse', { intents: ['general_action'], minutesElapsed: 5, narration: '', actions: [steal] });
+  assert.match(r2.text, /🤏 You take a purse of drams from a spice merchant and slip away/);
+  assert.doesNotMatch(r2.text, /seen|caught/i);
+  // …but someone saw, and it will come back.
+  const c = seen.store.listScheduled(seen.game.id, 'pending').find((i) => i.kind === 'consequence')!;
+  assert.match(String(c.payload.summary), /Someone saw Rhen steal a purse of drams .* thinks they got away clean/);
+  seen.store.close();
+
+  const caught = start({ roll: 0 });
+  const r3 = await caught.turn('I lift the merchant\'s purse', { intents: ['general_action'], minutesElapsed: 5, narration: '', actions: [steal] });
+  assert.match(r3.text, /✋ Caught trying to steal a purse of drams from a spice merchant\./);
+  assert.equal(caught.store.getAccountOf(caught.game.id, 'character', caught.player.id)!.balanceCents, 3_000);
+  caught.store.close();
+});
+
+test('deception and influence are rolled; the person acts on what the game decided', async () => {
+  const s = start({ roll: 1 });
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Sarai Tul', relationHint: null }, channel: 'in_person', spokenText: 'House Varr already forgave my debt.',
+    actions: [{ action: 'deceive', target: 'Sarai Tul', claim: 'House Varr already forgave my debt', difficulty: 4 }] }))
+    .enqueue('npc_turn', npc({ dialogue: 'Then I will strike your name.' }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I lie to the collector' });
+  assert.match(r.text, /🎭 Deception — "House Varr already forgave my debt": Sarai Tul believes you\./);
+  assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED[^\n]*\nRhen told you: "House Varr already forgave my debt"\. You BELIEVE it\./);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /deceive: the player tries to make someone present believe something false[^\n]*even if the player doesn't say "I lie"/);
+
+  const t = start({ roll: 0 });
+  t.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Sarai Tul', relationHint: null }, channel: 'in_person', spokenText: 'Take this and forget my name.',
+    actions: [{ action: 'influence', target: 'Sarai Tul', approach: 'bribe', goal: 'strike his debt from the ledger', difficulty: 5, bribe: 10 }] }))
+    .enqueue('npc_turn', npc({ dialogue: 'Ten drams? Keep walking.' }));
+  const r2 = await t.engine.takeTurn({ gameId: t.game.id, input: 'I bribe her' });
+  assert.match(r2.text, /🗣 Bribe Sarai Tul \(strike his debt from the ledger\): Sarai Tul is not moved\./);
+  assert.equal(t.store.getAccountOf(t.game.id, 'character', t.player.id)!.balanceCents, 2_000); // the bribe is paid either way
+  s.store.close();
+  t.store.close();
+});
+
+test('deeds people saw come back secretly; nobody saw, nothing happens', async () => {
+  const s = start();
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'I slept with your wife.',
+    deeds: [{ what: 'told Kesh Adar he had slept with his wife and called him a coward', against: 'Kesh Adar', severity: 5, tone: 'harm', public: true }] }))
+    .enqueue('npc_turn', npc({ dialogue: 'You will regret that.' }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
+  assert.doesNotMatch(r.text, /consequence|revenge/i); // the player is not told
+  const c = s.store.listScheduled(s.game.id, 'pending').find((i) => i.kind === 'consequence')!;
+  assert.match(String(c.payload.summary), /Rhen told Kesh Adar he had slept with his wife and called him a coward \(to Kesh Adar\) at .* — seen by Kesh Adar, bystanders\. Someone who saw it, or was wronged, acts on it/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /deeds: socially significant things Rhen does or says THIS turn/);
+
+  const q = start();
+  await q.turn('I mutter an insult about the house', { intents: ['general_action'], minutesElapsed: 1, narration: '',
+    deeds: [{ what: 'cursed House Varr under his breath', against: null, severity: 1, tone: 'harm', public: false }] });
+  assert.ok(!q.store.listScheduled(q.game.id, 'pending').some((i) => i.kind === 'consequence'));
+  s.store.close();
+  q.store.close();
+});
+
+test('the character sheet, XP rolls, levelling up and spending points', async () => {
+  const s = start({ roll: 1 });
+  const sheet = () => adventurePack.commands!.sheet!.run(s.store, s.game.id, [], 'en');
+  assert.match(sheet(), /^══ RHEN — Level 1 · XP 0\/100 ══\nHealth 100\/100\n\nATTRIBUTES  strength ●●●○○   agility ●●●○○   wits ●●○○○   presence ●●○○○\nSKILLS\n  combat         ●●○○○/);
+  assert.match(sheet(), /deception +●○○○○/);
+  assert.match(sheet(), /AMBITION  to become a warrior whose name is known across the known worlds/);
+  // Two big wins → level 2 (XP is rolled: base × 0.75–1.25).
+  for (const foe of ['a pit veteran', 'a house sellsword']) {
+    await s.turn(`I fight ${foe}`, { intents: ['general_action'], minutesElapsed: 5, narration: '', actions: [fight(foe, { threat: 4, intent: 'duel', witnessed: true })] });
+  }
+  assert.equal(s.me().level, 2);
+  assert.equal(s.me().points, 1);
+  assert.equal(s.me().maxHealth, 105);
+  assert.match(s.store.lastTurn(s.game.id)!.response!.text, /⬆ LEVEL 2! \+1 point to spend/);
+  assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['strength'], 'en'), 'You have 1 point; strength costs 3.');
+  assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['furtividade'], 'pt'), '✓ stealth → 2 · 0 points left');
+  assert.match(adventurePack.commands!.sheet!.run(s.store, s.game.id, [], 'pt'), /^══ RHEN — Nível 2[\s\S]*ATRIBUTOS  força ●●●○○[\s\S]*furtividade +●●○○○/);
   s.store.close();
 });

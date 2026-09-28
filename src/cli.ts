@@ -34,7 +34,8 @@ Options: --db <path> (default data/startup.db or $STARTUP_DB), --debug (print th
 Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
 While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
-In game: type what you do. Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit`;
+In game: type what you do. Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit
+  Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)`;
 
 function parseArgs(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
@@ -181,6 +182,8 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
       if (line === '/hints') { hints = !hints; console.log(hints ? t.hintsOn : t.hintsOff); continue; }
+      const cmd = line.match(/^\/(\w+)\s*(.*)$/);
+      if (cmd && engine.pack.commands?.[cmd[1]!]) { console.log(`\n${engine.pack.commands[cmd[1]!]!.run(store, gameId, cmd[2]!.split(/\s+/).filter(Boolean), lang)}\n`); continue; }
       if (line === '/status') { console.log(formatStatus(store, gameId)); continue; }
       if (line.startsWith('/inspect')) {
         const parts = line.split(/\s+/).slice(1);

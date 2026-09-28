@@ -37,7 +37,11 @@ export const ADVENTURE_WORLD: WorldDraft = {
     personality: 'Shaped by the player through play.',
     skills: ['knife-fighting', 'endurance', 'knows the lower city'], goals: ['Get a place in the high pit', 'Pay off the water-debt'], fears: ['Dying owing the house', 'Being forgotten'],
     ambition: 'to become a warrior whose name is known across the known worlds',
-    attributes: [{ key: 'combat', value: 2 }, { key: 'athletics', value: 2 }, { key: 'survival', value: 1 }, { key: 'stealth', value: 1 }, { key: 'persuasion', value: 0 }, { key: 'lore', value: 0 }, { key: 'fame', value: 1 }],
+    attributes: [
+      { key: 'strength', value: 3 }, { key: 'agility', value: 3 }, { key: 'wits', value: 2 }, { key: 'presence', value: 2 },
+      { key: 'combat', value: 2 }, { key: 'athletics', value: 2 }, { key: 'survival', value: 1 }, { key: 'stealth', value: 1 }, { key: 'perception', value: 1 },
+      { key: 'persuasion', value: 0 }, { key: 'deception', value: 1 }, { key: 'lore', value: 0 }, { key: 'fame', value: 1 },
+    ],
     location: 'a rented sleeping-niche above the Cisterns quarter',
     circumstances: ['owes House Varr eleven years of water (inherited)', 'sleeps in a rented niche'],
     startingMoney: 30, currency: { code: 'DRM', symbol: 'dr ' },

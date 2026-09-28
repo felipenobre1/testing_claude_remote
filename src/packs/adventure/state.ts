@@ -3,9 +3,18 @@ import type { PackTurnState } from '../types.ts';
 
 // Adventure pack state: bodies (health, injuries), skills that grow with practice, fame, and what people carry.
 
-export const SKILLS = ['combat', 'stealth', 'survival', 'athletics', 'persuasion', 'lore'] as const;
+export const SKILLS = ['combat', 'stealth', 'athletics', 'survival', 'perception', 'persuasion', 'deception', 'lore'] as const;
 export type Skill = (typeof SKILLS)[number];
+export const ATTRIBUTES = ['strength', 'agility', 'wits', 'presence'] as const;
+export type Attribute = (typeof ATTRIBUTES)[number];
+/** Which attribute backs each skill. */
+export const SKILL_ATTR: Record<Skill, Attribute> = {
+  combat: 'strength', stealth: 'agility', athletics: 'agility', survival: 'wits', perception: 'wits', persuasion: 'presence', deception: 'presence', lore: 'wits',
+};
 export const MAX_LEVEL = 5;
+/** XP needed to go from character level n to n+1. */
+export const xpForNext = (level: number) => 100 * level;
+export const DEFAULT_ATTRIBUTES: Record<Attribute, number> = { strength: 2, agility: 2, wits: 2, presence: 2 };
 /** Practice needed to go from `level` to the next one. */
 export const practiceFor = (level: number) => (level + 1) * 3;
 
@@ -19,6 +28,10 @@ export interface Profile {
   skills: Record<string, { level: number; practice: number }>;
   fame: number;
   deeds: string[]; // the last few things people talk about
+  attributes: Record<string, number>; // strength, agility, wits, presence (1–5)
+  xp: number; // toward the next level
+  level: number; // character level
+  points: number; // unspent points (skill = 1, attribute = 3)
   createdAt: string;
   updatedAt: string;
 }
@@ -58,19 +71,26 @@ export const ADVENTURE_MIGRATIONS = [
     created_at TEXT NOT NULL
   );
   `,
+  /* adventure v2 — the character sheet: attributes, XP, level, unspent points; new skills live in skills_json */ `
+  ALTER TABLE adv_profiles ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE adv_profiles ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE adv_profiles ADD COLUMN level INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE adv_profiles ADD COLUMN points INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 type Row = Record<string, any>;
 const mapProfile = (r: Row): Profile => ({
   characterId: r.character_id, gameId: r.game_id, health: r.health, maxHealth: r.max_health, injuries: JSON.parse(r.injuries_json),
   skills: JSON.parse(r.skills_json), fame: r.fame, deeds: JSON.parse(r.deeds_json), createdAt: r.created_at, updatedAt: r.updated_at,
+  attributes: { ...DEFAULT_ATTRIBUTES, ...JSON.parse(r.attributes_json ?? '{}') }, xp: r.xp ?? 0, level: r.level ?? 1, points: r.points ?? 0,
 });
 const mapItem = (r: Row): Item => ({ id: r.id, gameId: r.game_id, ownerId: r.owner_id, name: r.name, kind: r.kind, quality: r.quality, quantity: r.quantity, createdAt: r.created_at });
-const profileParams = (p: Profile) => ({ ...p, injuries: JSON.stringify(p.injuries), skills: JSON.stringify(p.skills), deeds: JSON.stringify(p.deeds) });
-const UPSERT_PROFILE = `INSERT INTO adv_profiles (character_id, game_id, health, max_health, injuries_json, skills_json, fame, deeds_json, created_at, updated_at)
-  VALUES (:characterId, :gameId, :health, :maxHealth, :injuries, :skills, :fame, :deeds, :createdAt, :updatedAt)
+const profileParams = (p: Profile) => ({ ...p, injuries: JSON.stringify(p.injuries), skills: JSON.stringify(p.skills), deeds: JSON.stringify(p.deeds), attributes: JSON.stringify(p.attributes) });
+const UPSERT_PROFILE = `INSERT INTO adv_profiles (character_id, game_id, health, max_health, injuries_json, skills_json, fame, deeds_json, attributes_json, xp, level, points, created_at, updated_at)
+  VALUES (:characterId, :gameId, :health, :maxHealth, :injuries, :skills, :fame, :deeds, :attributes, :xp, :level, :points, :createdAt, :updatedAt)
   ON CONFLICT (character_id) DO UPDATE SET health = :health, max_health = :maxHealth, injuries_json = :injuries, skills_json = :skills,
-    fame = :fame, deeds_json = :deeds, updated_at = :updatedAt`;
+    fame = :fame, deeds_json = :deeds, attributes_json = :attributes, xp = :xp, level = :level, points = :points, updated_at = :updatedAt`;
 const INSERT_ITEM = `INSERT INTO adv_items (id, game_id, owner_id, name, kind, quality, quantity, created_at)
   VALUES (:id, :gameId, :ownerId, :name, :kind, :quality, :quantity, :createdAt)`;
 
@@ -99,7 +119,8 @@ export class AdventureState implements PackTurnState {
   profileOf(characterId: string, gameId: string, now: string, init?: Partial<Profile>): Profile {
     let p = this.profiles.get(characterId);
     if (!p) {
-      p = { characterId, gameId, health: 100, maxHealth: 100, injuries: [], skills: {}, fame: 0, deeds: [], createdAt: now, updatedAt: now, ...init };
+      p = { characterId, gameId, health: 100, maxHealth: 100, injuries: [], skills: {}, fame: 0, deeds: [], attributes: { ...DEFAULT_ATTRIBUTES }, xp: 0, level: 1, points: 0,
+        createdAt: now, updatedAt: now, ...init };
       this.profiles.set(characterId, p);
       this.dirtyProfiles.add(characterId);
     }
