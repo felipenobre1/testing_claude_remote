@@ -15,6 +15,14 @@ export interface Company {
   description: string;
   productStage: ProductStage;
   totalShares: number;
+  /** false = a side project the founder runs personally (not registered yet; costs are paid from their own pocket). */
+  incorporated: boolean;
+  url: string | null;
+  signups: number;
+  activeUsers: number;
+  knownIssues: string[];
+  /** What each monthly active user costs to serve (servers, AI/API calls), in cents. */
+  costPerActiveUserCents: number;
   foundedGameTime: string;
   createdAt: string;
   updatedAt: string;
@@ -51,13 +59,30 @@ export const STARTUP_MIGRATIONS = [
     PRIMARY KEY (company_id, character_id)
   );
   `,
+  /* startup v2 — the product is real: address, users, known problems, usage costs; side projects before registration */ `
+  ALTER TABLE companies ADD COLUMN incorporated INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE companies ADD COLUMN url TEXT;
+  ALTER TABLE companies ADD COLUMN signups INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE companies ADD COLUMN active_users INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE companies ADD COLUMN known_issues_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE companies ADD COLUMN cost_per_active_user_cents INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 type Row = Record<string, any>;
 const mapCompany = (r: Row): Company => ({
   id: r.id, gameId: r.game_id, name: r.name, description: r.description, productStage: r.product_stage, totalShares: r.total_shares,
   foundedGameTime: r.founded_game_time, createdAt: r.created_at, updatedAt: r.updated_at,
+  incorporated: Boolean(r.incorporated), url: r.url ?? null, signups: r.signups, activeUsers: r.active_users,
+  knownIssues: JSON.parse(r.known_issues_json ?? '[]'), costPerActiveUserCents: r.cost_per_active_user_cents,
 });
+const companyParams = (c: Company) => ({ ...c, incorporated: c.incorporated ? 1 : 0, knownIssues: JSON.stringify(c.knownIssues) });
+const INSERT_COMPANY = `INSERT INTO companies (id, game_id, name, description, product_stage, total_shares, founded_game_time, created_at, updated_at,
+    incorporated, url, signups, active_users, known_issues_json, cost_per_active_user_cents)
+  VALUES (:id, :gameId, :name, :description, :productStage, :totalShares, :foundedGameTime, :createdAt, :updatedAt,
+    :incorporated, :url, :signups, :activeUsers, :knownIssues, :costPerActiveUserCents)`;
+const INSERT_HOLDING = `INSERT INTO shareholdings (company_id, character_id, shares, role, acquired_game_time)
+  VALUES (:companyId, :characterId, :shares, :role, :acquiredGameTime)`;
 const mapHolding = (r: Row): Shareholding => ({
   companyId: r.company_id, characterId: r.character_id, shares: r.shares, role: r.role, acquiredGameTime: r.acquired_game_time,
 });
@@ -70,6 +95,11 @@ export const companyRepo = {
     store.all('SELECT * FROM shareholdings WHERE company_id = :c ORDER BY acquired_game_time, rowid', { c: companyId }).map(mapHolding),
   of: (store: Store, characterId: string) =>
     store.all('SELECT c.* FROM companies c JOIN shareholdings h ON h.company_id = c.id WHERE h.character_id = :ch ORDER BY c.rowid', { ch: characterId }).map(mapCompany),
+  /** Direct creation (world seeding, inside the creation transaction). */
+  create: (store: Store, c: Company, founderId: string) => {
+    store.run(INSERT_COMPANY, companyParams(c));
+    store.run(INSERT_HOLDING, { companyId: c.id, characterId: founderId, shares: FOUNDER_SHARES, role: 'founder', acquiredGameTime: c.foundedGameTime });
+  },
 };
 
 /** Simulated company state for one turn; written at commit. */
@@ -110,25 +140,26 @@ export class StartupState implements PackTurnState {
     this.writes.push({ kind: 'insert_holding', h: { ...h } }, { kind: 'update_company', c: { ...c } });
   }
   setStage(companyId: string, stage: ProductStage, now: string) {
+    this.update(companyId, { productStage: stage }, now);
+  }
+  update(companyId: string, patch: Partial<Company>, now: string) {
     const c = this.companies.get(companyId)!;
-    c.productStage = stage;
-    c.updatedAt = now;
-    this.writes.push({ kind: 'update_company', c: { ...c } });
+    Object.assign(c, patch, { updatedAt: now });
+    this.writes.push({ kind: 'update_company', c: { ...c, knownIssues: [...c.knownIssues] } });
   }
 
   commit(store: Store) {
     const out: { table: string; op: string; id: string; note?: string }[] = [];
     for (const w of this.writes) {
       if (w.kind === 'insert_company') {
-        store.run(`INSERT INTO companies (id, game_id, name, description, product_stage, total_shares, founded_game_time, created_at, updated_at)
-          VALUES (:id, :gameId, :name, :description, :productStage, :totalShares, :foundedGameTime, :createdAt, :updatedAt)`, { ...w.c });
+        store.run(INSERT_COMPANY, companyParams(w.c));
         out.push({ table: 'companies', op: 'insert', id: w.c.id, note: w.c.name });
       } else if (w.kind === 'update_company') {
-        store.run('UPDATE companies SET product_stage = :productStage, total_shares = :totalShares, updated_at = :updatedAt WHERE id = :id', { ...w.c });
+        store.run(`UPDATE companies SET product_stage = :productStage, total_shares = :totalShares, incorporated = :incorporated, url = :url, signups = :signups,
+          active_users = :activeUsers, known_issues_json = :knownIssues, cost_per_active_user_cents = :costPerActiveUserCents, updated_at = :updatedAt WHERE id = :id`, companyParams(w.c));
         out.push({ table: 'companies', op: 'update', id: w.c.id, note: `${w.c.productStage}, ${w.c.totalShares} shares` });
       } else {
-        store.run(`INSERT INTO shareholdings (company_id, character_id, shares, role, acquired_game_time)
-          VALUES (:companyId, :characterId, :shares, :role, :acquiredGameTime)`, { ...w.h });
+        store.run(INSERT_HOLDING, { ...w.h });
         out.push({ table: 'shareholdings', op: 'insert', id: `${w.h.companyId}/${w.h.characterId}`, note: `${w.h.shares} shares` });
       }
     }

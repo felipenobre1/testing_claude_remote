@@ -124,7 +124,7 @@ test('world turn: advancing three days delivers what was scheduled within them â
   const threeDays = await s.engine.takeTurn({ gameId: s.game.id, input: 'three days' });
   assert.match(threeDays.text, /ðŸ“± .*saw your prototype, not bad/);
   assert.doesNotMatch(threeDays.text, /call me when you can/);
-  assert.equal(s.store.listScheduled(s.game.id, 'pending').length, 1);
+  assert.equal(s.store.listScheduled(s.game.id, 'pending').filter((i) => i.kind === 'message').length, 1);
   s.close();
 });
 

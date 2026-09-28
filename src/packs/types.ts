@@ -2,7 +2,8 @@ import type { z } from 'zod';
 import type { Store } from '../db/store.ts';
 import type { Migration } from '../db/migrations.ts';
 import type { Offer } from '../domain/types.ts';
-import type { WorldDraft } from '../domain/world.ts';
+import type { Character } from '../domain/types.ts';
+import type { WorldDraft, WorldSeed } from '../domain/world.ts';
 import type { WorldPlanner } from '../engine/planner.ts';
 
 // ============================================================================
@@ -55,7 +56,18 @@ export interface GamePack {
     guidance: string;
     /** A complete example draft (also used for quick start). */
     template: WorldDraft;
+    /** How far along the player's journey can be at the start (e.g. idea / MVP / first users). */
+    stages?: { id: string; label: string; description: string }[];
+    defaultStage?: string;
+    /** Kinds of starting assets this pack gives mechanics to (e.g. a product with signups), with the metric keys it reads. */
+    assetKinds?: { kind: string; description: string; metrics: string[] }[];
+    /** Pack-specific consistency checks on a draft (phrased for the player). */
+    validate?(draft: WorldDraft): string[];
+    /** Creates the pack's starting state from the approved seed, inside the creation transaction. */
+    seed?(ctx: PackSeedContext): void;
   };
+  /** Once per game week while time passes (Monday 08:00): pack dynamics; returns lines for the weekly report. */
+  weekly?(api: WorldPlanner, weekStart: string, weekEnd: string): string[];
   offerKinds: OfferKindDef[];
   /** Pack-defined owners of resources (companies, guilds, houses): lookup by name and control. */
   entities: {
@@ -78,6 +90,17 @@ export interface GamePack {
   inspect?(store: Store, gameId: string): string;
   /** Name of a pack entity from committed state (for debug views). */
   entityLabel?(store: Store, id: string): string;
+}
+
+export interface PackSeedContext {
+  store: Store;
+  gameId: string;
+  player: Character;
+  playerAccountId: string;
+  seed: WorldSeed;
+  now: string;
+  /** A monthly flow (null = the outside world), first due on the 1st of next month. */
+  addMonthly(fromAccountId: string | null, toAccountId: string | null, description: string, cents: number): void;
 }
 
 /** Pack state for one turn: read by briefings, changed by actions, written at commit. */

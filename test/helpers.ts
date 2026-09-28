@@ -6,7 +6,10 @@ import type { CharacterProposal, DecisionState, InterpretResult } from '../src/d
 import { Engine } from '../src/engine/turn.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
 import type { LLMTask } from '../src/llm/provider.ts';
-import { startupPack } from '../src/packs/startup/index.ts';
+import { CLASSIC_DRAFT, startupPack } from '../src/packs/startup/index.ts';
+
+/** The Startup pack with its original opening (idea stage, €2,500) — the world most tests were written against. */
+export const classicStartupPack = { ...startupPack, worldCreation: { ...startupPack.worldCreation, template: CLASSIC_DRAFT } };
 
 export function tmpDbPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'startup-test-')), 'game.db');
@@ -16,7 +19,7 @@ export function tmpDbPath(): string {
 export function openSession(path: string, opts: { rng?: (seed: string) => () => number; director?: boolean } = {}) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  const engine = new Engine(store, llm, { pack: startupPack, ...opts });
+  const engine = new Engine(store, llm, { pack: classicStartupPack, ...opts });
   return { store, llm, engine, close: () => store.close() };
 }
 

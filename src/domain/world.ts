@@ -37,11 +37,36 @@ const DraftSituationSchema = z.strictObject({
   involves: z.array(z.string().max(80)).max(6), // actor names, or "player"
 });
 
+/** Something the player character has made or owns at the start, with its state (e.g. a product, a boat, a shop). */
+const DraftAssetSchema = z.strictObject({
+  name: z.string().min(1).max(80),
+  kind: text(40), // one of the pack's asset kinds when it has them (e.g. "product"), else free text
+  description: text(400),
+  url: opt(300), // a real web address, if it has one (people in the world can open it)
+  state: opt(40), // e.g. "mvp"
+  metrics: z.array(z.strictObject({ key: text(40), value: z.number() })).max(6),
+  monthlyCosts: z.array(z.strictObject({ label: text(120), amount: z.number() })).max(6), // what keeping it running costs
+  knownIssues: z.array(text(200)).max(5),
+});
+
+/** A concrete opportunity already on the horizon: an event, a deadline to apply, a place to be. Nobody has to attend. */
+const DraftLeadSchema = z.strictObject({
+  title: z.string().min(3).max(120),
+  description: text(400),
+  when: opt(16), // 'YYYY-MM-DDTHH:MM' or null for an open lead without a date
+  location: opt(160),
+  cost: z.number().nullable(), // entry price, if any
+  repeatsWeekly: z.boolean(),
+});
+
+const MoneyLineSchema = z.strictObject({ label: text(120), amount: z.number() });
+
 export const WorldDraftSchema = z.object({
   packId: opt(40), // which game pack runs this world (mechanics); chosen with the player
   premise: opt(600), // the story/world in one or two sentences
   sourceWorld: opt(120), // "the real world", "Dune", null = original
   canonPolicy: z.enum(CANON_POLICIES).nullable(),
+  startingStage: opt(40), // how far along the player's journey is at the start (the pack lists stages)
   setting: z.strictObject({
     place: opt(160),
     era: opt(160),
@@ -74,7 +99,15 @@ export const WorldDraftSchema = z.object({
     currency: z.strictObject({ code: text(10), symbol: text(4) }).nullable(),
     possessions: z.array(text(160)).max(8),
     knowledge: z.array(text(240)).max(8), // what the player character knows at the start
+    assets: z.array(DraftAssetSchema).max(4), // what they have already made or own — the starting point of their journey
   }),
+  /** Approximate prices of this world (fixed at creation, extended in play) and the player's running costs and income. */
+  economy: z.strictObject({
+    priceList: z.array(z.strictObject({ item: text(120), price: z.number() })).max(30),
+    livingCosts: z.array(MoneyLineSchema).max(8), // monthly, e.g. phone, transport, "daily life"
+    income: z.array(MoneyLineSchema).max(4), // monthly, e.g. pocket money
+  }),
+  openLeads: z.array(DraftLeadSchema).max(6),
   locations: z.array(z.strictObject({ name: text(120), description: text(400) })).max(6),
   factions: z.array(z.strictObject({ name: text(120), description: text(400) })).max(6),
   actors: z.array(DraftActorSchema).max(6),
@@ -89,12 +122,13 @@ export const WorldDraftSchema = z.object({
 export type WorldDraft = z.infer<typeof WorldDraftSchema>;
 
 export const EMPTY_DRAFT: WorldDraft = {
-  packId: null, premise: null, sourceWorld: null, canonPolicy: null,
+  packId: null, premise: null, sourceWorld: null, canonPolicy: null, startingStage: null,
   setting: { place: null, era: null, startDate: null, timezone: null, description: null },
   style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null },
   designPrinciples: [], worldRules: [],
   player: { name: null, age: null, gender: null, occupation: null, background: null, personality: null, skills: [], goals: [], fears: [], location: null,
-    circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [] },
+    circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [], assets: [] },
+  economy: { priceList: [], livingCosts: [], income: [] }, openLeads: [],
   locations: [], factions: [], actors: [], historicalContext: null, currentSituation: null, initialPressures: [], initialSituations: [],
   startingScene: { location: null, description: null }, unresolvedQuestions: [], contradictions: [],
 };
@@ -118,6 +152,7 @@ export interface WorldSeed {
   packId: string;
   createdAt: string;
   premise: string;
+  startingStage: string | null;
   world: {
     sourceWorld: string | null;
     canonPolicy: CanonPolicy;
@@ -144,5 +179,7 @@ export interface WorldSeed {
   actors: WorldDraft['actors'];
   initialPressures: string[];
   initialSituations: WorldDraft['initialSituations']; // conditions only
+  economy: WorldDraft['economy'];
+  openLeads: WorldDraft['openLeads'];
   startingScene: { location: string; description: string };
 }

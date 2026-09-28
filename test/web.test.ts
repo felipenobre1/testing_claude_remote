@@ -9,8 +9,7 @@ import { Engine } from '../src/engine/turn.ts';
 import type { Trace } from '../src/engine/trace.ts';
 import { checkFetchable, extractUrls, htmlToText, HttpPageFetcher, type FetchedPage, type PageFetcher } from '../src/engine/web.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
-import { startupPack } from '../src/packs/startup/index.ts';
-import { interp, lastPrompt, MATTEO, npc, SOFIA, tmpDbPath } from './helpers.ts';
+import { classicStartupPack, interp, lastPrompt, MATTEO, npc, SOFIA, tmpDbPath } from './helpers.ts';
 
 class StubFetcher implements PageFetcher {
   readonly fetched: string[] = [];
@@ -31,7 +30,7 @@ const LANDING = 'Grade Economy — Your grades are your salary. Students earn Gr
 function session(path: string, fetcher: PageFetcher | null) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  return { store, llm, engine: new Engine(store, llm, { pack: startupPack, fetcher }), close: () => store.close() };
+  return { store, llm, engine: new Engine(store, llm, { pack: classicStartupPack, fetcher }), close: () => store.close() };
 }
 
 test('extractUrls finds links, normalises them, and ignores non-links', () => {

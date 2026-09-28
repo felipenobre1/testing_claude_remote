@@ -473,4 +473,16 @@ export const MIGRATIONS: Migration[] = [
   CREATE TRIGGER world_seeds_immutable BEFORE UPDATE ON world_seeds
     BEGIN SELECT RAISE(ABORT, 'world seeds are immutable'); END;
   `,
+
+  /* v7 — The world's price book: approximate prices fixed at creation and remembered once paid in play. */ `
+  CREATE TABLE prices (
+    game_id           TEXT NOT NULL REFERENCES games(id),
+    item_key          TEXT NOT NULL,             -- normalized item name
+    item              TEXT NOT NULL,
+    price_cents       INTEGER NOT NULL CHECK (price_cents >= 0),
+    source            TEXT NOT NULL,             -- 'seed' (approved at creation) | 'paid' (first paid in play)
+    created_game_time TEXT NOT NULL,
+    PRIMARY KEY (game_id, item_key)
+  );
+  `,
 ];

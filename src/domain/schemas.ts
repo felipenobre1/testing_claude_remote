@@ -23,6 +23,7 @@ export const CORE_ACTIONS = [
   z.strictObject({ action: z.literal('respond_to_offer'), offerId: z.string(), accept: z.boolean() }),
   z.strictObject({ action: z.literal('make_promise'), toCharacterName: z.string(), description: z.string().min(3).max(300), amount: z.number().nullable(), dueInDays: z.number().nullable() }),
   z.strictObject({ action: z.literal('fulfill_promise'), promiseId: z.string() }),
+  z.strictObject({ action: z.literal('research'), topic: z.string().min(2).max(120), findings: z.array(z.string().min(3).max(300)).min(1).max(5) }),
 ] as const;
 type CoreAction = z.infer<(typeof CORE_ACTIONS)[number]>;
 /** A pack action: an object with a literal `action` discriminator. */

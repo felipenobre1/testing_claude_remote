@@ -14,7 +14,10 @@ import { Engine } from '../src/engine/turn.ts';
 import { OpenAIProvider } from '../src/llm/openai.ts';
 import { HttpPageFetcher } from '../src/engine/web.ts';
 import { companyRepo } from '../src/packs/startup/company.ts';
-import { startupPack } from '../src/packs/startup/index.ts';
+import { CLASSIC_DRAFT, startupPack } from '../src/packs/startup/index.ts';
+
+// Sessions 1–3 replay the original Milestone 1/2 script (idea stage, €2,500).
+const classicStartupPack = { ...startupPack, worldCreation: { ...startupPack.worldCreation, template: CLASSIC_DRAFT } };
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/provider.ts';
 import { WorldCreation } from '../src/engine/creation.ts';
 import type { WorldSeed } from '../src/domain/world.ts';
@@ -58,7 +61,7 @@ const MONEY = /2[.,]?500|two and a half|duemilacinquecento|10[.,]?000/i;
 async function session(label: string, inputs: string[], gameId?: string) {
   const store = new Store(dbPath);
   const llm = new Recording(new OpenAIProvider());
-  const engine = new Engine(store, llm, { pack: startupPack, fetcher: new HttpPageFetcher(), director: true });
+  const engine = new Engine(store, llm, { pack: classicStartupPack, fetcher: new HttpPageFetcher(), director: true });
   let id = gameId;
   if (!id) {
     const g = engine.newGame();

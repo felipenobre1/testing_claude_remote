@@ -178,7 +178,7 @@ test('Milestone 2: founding Grade Economy with Matteo, across sessions', async (
     await s2.engine.takeTurn({ gameId, input: 'I call Matteo' });
     const m = lastPrompt(s2.llm, 'npc_turn');
     assert.match(m, /Grade Economy — Grades as salary/);
-    assert.match(m, /stage: prototype · company cash: €480\.00 · owners: Felipe 60\.0% \(founder\), Matteo Ferrari 40\.0% \(cofounder\)/);
+    assert.match(m, /stage: prototype · users: 0 signed up, 0 active · company cash: €480\.00 · owners: Felipe 60\.0% \(founder\), Matteo Ferrari 40\.0% \(cofounder\)/);
     assert.match(m, /Felipe → Matteo Ferrari: Pay back €100 for the logo \(€100\.00\) · due .* · OVERDUE/);
 
     await s2.engine.takeTurn({ gameId, input: 'I call Sofia' });

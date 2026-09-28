@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Offer } from '../../domain/types.ts';
-import { EMPTY_DRAFT } from '../../domain/world.ts';
+import { STARTUP_TEMPLATE } from './worlds.ts';
 import type { WorldPlanner } from '../../engine/planner.ts';
 import { newId } from '../../engine/util.ts';
 import type { GamePack, OfferKindDef, PackAction } from '../types.ts';
@@ -13,7 +13,7 @@ import { companyRepo, pct, PRODUCT_STAGES, STARTUP_MIGRATIONS, StartupState, typ
 // entities (companies own accounts) and pack actions.
 // ============================================================================
 
-export const START_TIME = '2026-09-27T09:14'; // Sunday, Europe/Rome
+export { CLASSIC_DRAFT, STARTUP_TEMPLATE } from './worlds.ts';
 
 const st = (api: WorldPlanner) => api.packState as StartupState;
 const cents = (x: number) => Math.round(x * 100);
@@ -23,8 +23,35 @@ function companyLines(api: WorldPlanner, c: Company): string[] {
   const table = st(api).holdingsOf(c.id).map((h) => `${api.name(h.characterId)} ${pct(h.shares, c.totalShares)} (${h.role})`).join(', ');
   const costs = acct ? api.outgoing(acct.id).map((r) => `${r.description} ${api.money(r.amountCents)}/month`).join('; ') : '';
   const revenue = acct ? api.incoming(acct.id).map((r) => `${r.description} ${api.money(r.amountCents)}/month`).join('; ') : '';
-  return [`${c.name} — ${c.description}`,
-    `  stage: ${c.productStage} · company cash: ${api.money(acct?.balanceCents ?? 0)} · owners: ${table}${costs ? ` · monthly costs: ${costs}` : ''}${revenue ? ` · monthly revenue: ${revenue}` : ''}`];
+  return [`${c.name}${c.incorporated ? '' : ' (side project — not registered as a company yet)'} — ${c.description}${c.url ? ` · ${c.url}` : ''}`,
+    `  stage: ${c.productStage} · users: ${c.signups} signed up, ${c.activeUsers} active${c.incorporated ? ` · company cash: ${api.money(acct?.balanceCents ?? 0)}` : ''} · owners: ${table}`
+      + `${costs ? ` · monthly costs: ${costs}` : ''}${revenue ? ` · monthly revenue: ${revenue}` : ''}`,
+    ...(c.knownIssues.length ? [`  known problems: ${c.knownIssues.join('; ')}`] : [])];
+}
+
+const USAGE = (c: Company) => `${c.name}: usage costs (servers, AI/API)`;
+/** Usage costs follow active users. A side project is paid from the founder's pocket; a funded company pays its own. */
+function syncUsageCost(api: WorldPlanner, c: Company) {
+  const personal = api.ensureAccount('character', api.ctx.player.id);
+  const company = api.account('entity', c.id);
+  const payer = c.incorporated && company && company.balanceCents > 0 ? company : personal;
+  const other = payer === personal ? company : personal;
+  api.setRecurring(payer, null, USAGE(c), c.activeUsers * c.costPerActiveUserCents);
+  if (other) api.setRecurring(other, null, USAGE(c), 0);
+}
+const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+/** Share of new signups who actually start using the product; known problems scare people off. */
+const activation = (c: Company) => clamp(35 - 5 * c.knownIssues.length, 10, 50) / 100; // integer percent: no float drift
+/** Share of active users still active a week later. */
+const retention = (c: Company) => clamp((c.productStage === 'launched' ? 92 : 86) - 5 * c.knownIssues.length, 50, 97) / 100;
+const STAGE_REACH: Record<ProductStage, number> = { idea: 0.3, prototype: 0.6, mvp: 1, launched: 1.3 };
+
+/** A product the player works on (any company they belong to), by name. */
+function playerProduct(api: WorldPlanner, a: Record<string, unknown>, key = 'productName'): Company | string {
+  const c = st(api).byName(String(a[key]));
+  if (!c) return `There is no product or company called "${a[key]}".`;
+  if (!st(api).isMember(c.id, api.ctx.player.id)) return `You are not part of ${c.name}.`;
+  return c;
 }
 
 /** Offers are made on behalf of a company the player owns part of. */
@@ -115,17 +142,29 @@ const actions: PackAction[] = [
   {
     name: 'found_company',
     schema: z.strictObject({ action: z.literal('found_company'), name: z.string().min(2).max(80), description: z.string().min(3).max(400), initialInvestment: z.number() }),
-    doc: 'found_company: actually founding/registering a company (initialInvestment = personal money put in now, often 0).',
+    doc: 'found_company: actually founding/registering a company (initialInvestment = personal money put in now, often 0). Registering an existing side project uses its name.',
     handle: (api, a) => {
       const me = api.ctx.player.id;
       const name = String(a.name).trim();
-      if (st(api).byName(name)) return api.reject(a, `A company called ${name} already exists.`), null;
       const invest = cents(Number(a.initialInvestment));
       if (invest < 0) return 'found_company: investment cannot be negative';
       const personal = api.ensureAccount('character', me);
       if (invest > personal.balanceCents) return api.reject(a, `Can't put ${api.money(invest)} into ${name}: you have only ${api.money(personal.balanceCents)}.`), null;
+      const existing = st(api).byName(name);
+      if (existing && !existing.incorporated && st(api).isMember(existing.id, me)) {
+        // Registering the side project: same product, same users — now a company with its own account.
+        st(api).update(existing.id, { incorporated: true }, api.ctx.now);
+        const acct = api.ensureAccount('entity', existing.id);
+        if (invest > 0) api.move(personal, acct, invest, `founder investment in ${name}`, 'investment');
+        syncUsageCost(api, existing);
+        api.event('company_founded', `${api.ctx.player.name} registered ${name} as a company${invest ? ` with ${api.money(invest)}` : ''}.`, [me], [{ characterId: me, role: 'actor' }], 4);
+        api.results.push(`✓ ${name} is now a registered company — you own 100%${invest ? ` · company cash ${api.money(acct.balanceCents)} · your cash ${api.money(personal.balanceCents)}` : ''}`);
+        return null;
+      }
+      if (existing) return api.reject(a, `A company called ${name} already exists.`), null;
       const c: Company = { id: newId('co'), gameId: api.ctx.gameId, name, description: String(a.description), productStage: 'idea', totalShares: 1_000_000,
-        foundedGameTime: api.ctx.gameTime, createdAt: api.ctx.now, updatedAt: api.ctx.now };
+        foundedGameTime: api.ctx.gameTime, createdAt: api.ctx.now, updatedAt: api.ctx.now,
+        incorporated: true, url: null, signups: 0, activeUsers: 0, knownIssues: [], costPerActiveUserCents: 0 };
       st(api).found(c, me);
       const acct = api.ensureAccount('entity', c.id);
       if (invest > 0) api.move(personal, acct, invest, `founder investment in ${name}`, 'investment');
@@ -172,6 +211,55 @@ const actions: PackAction[] = [
       return null;
     },
   },
+  {
+    name: 'promote_product',
+    schema: z.strictObject({ action: z.literal('promote_product'), productName: z.string(), channel: z.string().min(2).max(120), hours: z.number() }),
+    doc: 'promote_product: the player actually puts the product in front of people now (a post in a community, messages to potential users, a demo at an event, flyers). channel = where/how; hours = effort spent. The game decides how many sign up.',
+    handle: (api, a) => {
+      const c = playerProduct(api, a);
+      if (typeof c === 'string') return api.reject(a, c), null;
+      const hours = Number(a.hours);
+      if (!(hours > 0 && hours <= 80)) return 'promote_product: hours must be between 0 and 80';
+      if (c.productStage === 'idea' && !c.url) return api.reject(a, `${c.name} is only an idea — there is nothing for people to sign up to yet.`), null;
+      const roll = api.random(`promote:${c.id}:${a.channel}`);
+      const reached = Math.round(Math.min(hours, 20) * 0.5 * STAGE_REACH[c.productStage] * (0.2 + 1.6 * roll));
+      const active = Math.round(reached * activation(c));
+      st(api).update(c.id, { signups: c.signups + reached, activeUsers: Math.min(c.signups + reached, c.activeUsers + active) }, api.ctx.now);
+      syncUsageCost(api, c);
+      const me = api.ctx.player.id;
+      api.event('product_update', `${api.ctx.player.name} promoted ${c.name} (${a.channel}): ${reached} new signups.`, [me], [{ characterId: me, role: 'actor' }], 2);
+      api.results.push(reached
+        ? `📈 ${c.name} via ${a.channel}: +${reached} signup${reached === 1 ? '' : 's'}${active ? `, ${active} started using it` : ', nobody really started using it yet'} · now ${c.signups} signed up, ${c.activeUsers} active`
+        : `📉 ${c.name} via ${a.channel}: nobody signed up this time.`);
+      return null;
+    },
+  },
+  {
+    name: 'improve_product',
+    schema: z.strictObject({ action: z.literal('improve_product'), productName: z.string(), fixedProblem: z.string().nullable(), newProblem: z.string().max(200).nullable(), change: z.string().min(3).max(300) }),
+    doc: 'improve_product: the player works on the product (fixing a known problem, shipping something). fixedProblem = the known problem fixed (as listed), only if the time spent plausibly fixes it; newProblem = a problem they discovered (e.g. from user feedback), else null.',
+    handle: (api, a) => {
+      const c = playerProduct(api, a);
+      if (typeof c === 'string') return api.reject(a, c), null;
+      let issues = [...c.knownIssues];
+      const lines: string[] = [];
+      if (a.fixedProblem) {
+        const want = String(a.fixedProblem).toLowerCase();
+        const words = new Set(want.split(/\W+/).filter((w) => w.length > 3));
+        const hit = issues.find((i) => i.toLowerCase().includes(want) || want.includes(i.toLowerCase())
+          || i.toLowerCase().split(/\W+/).filter((w) => words.has(w)).length >= 2);
+        if (!hit) return api.reject(a, `${c.name} has no known problem like "${a.fixedProblem}".`), null;
+        issues = issues.filter((i) => i !== hit);
+        lines.push(`fixed: ${hit}`);
+      }
+      if (a.newProblem && !issues.includes(String(a.newProblem))) { issues = [...issues, String(a.newProblem)].slice(-8); lines.push(`new known problem: ${a.newProblem}`); }
+      st(api).update(c.id, { knownIssues: issues }, api.ctx.now);
+      const me = api.ctx.player.id;
+      api.event('product_update', `${api.ctx.player.name} worked on ${c.name}: ${a.change}.`, [me], [{ characterId: me, role: 'actor' }], 2);
+      api.results.push(`🛠 ${c.name}: ${a.change}${lines.length ? ` · ${lines.join(' · ')}` : ''} · known problems: ${issues.length}`);
+      return null;
+    },
+  },
 ];
 
 export const startupPack: GamePack = {
@@ -180,40 +268,66 @@ export const startupPack: GamePack = {
   currency: { code: 'EUR', symbol: '€' },
   migrations: STARTUP_MIGRATIONS,
   worldCreation: {
-    summary: 'a realistic present-day life where the player tries to build a company: money, co-founders, hiring, equity, investors and customers',
+    summary: 'a realistic present-day startup journey: a product, users, money, co-founders, hiring, equity, investors and customers',
     guidance: [
-      'Startup mechanics: companies with cap tables, joining/hiring/buying/investing offers, a money ledger, recurring costs and promises.',
-      'Good fit for grounded, real-world settings (any real city, any recent year). Ask about: where, when, the player\'s age, money, skills,',
-      'living situation and whether they already have an idea or a company. Starting money matters a lot here — make it explicit.',
-      'Default world: the real world, history continues unless the story changes it; NPCs are busy, sceptical and have their own lives.',
+      'Startup mechanics: a product with real numbers (signups, active users, known problems, usage costs), companies with cap tables,',
+      'joining/hiring/buying/investing offers, a money ledger with monthly costs, promotion and product work, events and networking.',
+      'Start where the journey starts: usually the player already built something small (an MVP, a landing page) alone, with little money and no network.',
+      'Put the product in player.assets with kind "product": its real URL if the player has one, state (idea/prototype/mvp/launched), metrics signups,',
+      'activeUsers and costPerActiveUserMonthly (servers + AI/API per active user, typically 0.05–1), monthlyCosts (domain, paid tools) and honest knownIssues.',
+      'Ask about: the product and where it stands, the player\'s age, skills, money, living situation and what pushes them. Offer 2–3 concrete open leads',
+      '(meetups, talks, hackathons, communities — real kinds of events for that city) with dates in the first two weeks.',
     ].join('\n'),
-    template: {
-      ...EMPTY_DRAFT,
-      packId: 'startup',
-      premise: 'An eighteen-year-old in Milan wants to build a startup, with €2,500, a laptop and no idea yet.',
-      sourceWorld: 'the real world',
-      canonPolicy: 'history_continues_unless_changed',
-      setting: { place: 'Milan', era: '2026, the present day', startDate: START_TIME, timezone: 'Europe/Rome',
-        description: 'The real Milan in September 2026: universities starting, a small but active startup scene, expensive rents.' },
-      style: { tone: 'grounded, realistic, sometimes funny', realism: 'high — real prices, real institutions, busy people who owe the player nothing',
-        difficulty: 'hard; most attempts fail', narrativeStyle: 'second person, concise', playerSignificance: 'a nobody: no network, no money, no reputation yet' },
-      designPrinciples: [
-        'Do not manufacture destiny around the player; success must be earned.',
-        'People have their own lives and priorities; rejection and silence are normal.',
-        'Money, time and trust are scarce and tracked.',
-      ],
-      worldRules: ['The real world of 2026: real laws, real companies, real technology — nothing magical.'],
-      player: { ...EMPTY_DRAFT.player,
-        name: 'Felipe', age: 18, occupation: 'Recent liceo graduate, not enrolled anywhere yet',
-        background: 'Born and raised in Milan. Just finished liceo scientifico. Still lives at home with parents. '
-          + 'Self-taught programmer who has built small web apps and scripts. No company yet and little business experience.',
-        skills: ['technical', 'ambitious'], goals: ['Build a startup'], location: 'Milan (family apartment)',
-        circumstances: ['lives with parents'], startingMoney: 2_500, currency: { code: 'EUR', symbol: '€' }, possessions: ['a laptop', 'a phone'] },
-      currentSituation: "You're eighteen and still living with your parents. You've got €2,500 in your bank account, a laptop, and enough programming "
-        + "experience to build things yourself. For months you've been thinking about starting a company. You don't have an idea yet. "
-        + 'No investors. No employees. No customers.',
-      startingScene: { location: 'Home — bedroom in the family apartment, Milan', description: 'Sunday morning. Laptop open on the desk, phone beside it.' },
+    stages: [
+      { id: 'idea', label: 'an idea, nothing built yet', description: 'nothing built; the journey starts at zero' },
+      { id: 'mvp', label: 'a working MVP and a landing page, a handful of signups', description: 'something small and real exists; nobody knows about it' },
+      { id: 'first_users', label: 'a live product with a small group of real users', description: 'people use it; the question is whether it grows' },
+    ],
+    defaultStage: 'mvp',
+    assetKinds: [{ kind: 'product', description: 'the product the player built (becomes a side project they can later register as a company)', metrics: ['signups', 'activeUsers', 'costPerActiveUserMonthly'] }],
+    validate(draft) {
+      const products = draft.player.assets.filter((x) => x.kind === 'product');
+      const out: string[] = [];
+      if ((draft.startingStage === 'mvp' || draft.startingStage === 'first_users') && !products.length) out.push('at this starting stage the player needs a product (what have they built?)');
+      for (const p of products) {
+        if (p.url && !/^https?:\/\/\S+\.\S+/.test(p.url)) out.push(`${p.name}'s web address must be a full URL (https://…)`);
+        const m = Object.fromEntries(p.metrics.map((x) => [x.key, x.value]));
+        if ((m.activeUsers ?? 0) > (m.signups ?? 0)) out.push(`${p.name} cannot have more active users than signups`);
+      }
+      return out;
     },
+    seed({ store, gameId, player, playerAccountId, seed, now, addMonthly }) {
+      for (const p of seed.player.assets.filter((x) => x.kind === 'product')) {
+        const m = Object.fromEntries(p.metrics.map((x) => [x.key, x.value]));
+        const stage: ProductStage = PRODUCT_STAGES.includes(p.state as ProductStage) ? p.state as ProductStage
+          : seed.startingStage === 'first_users' ? 'launched' : seed.startingStage === 'idea' ? 'idea' : 'mvp';
+        const c: Company = {
+          id: newId('co'), gameId, name: p.name, description: p.description, productStage: stage, totalShares: 1_000_000, foundedGameTime: seed.world.startDate,
+          createdAt: now, updatedAt: now, incorporated: false, url: p.url, signups: Math.max(0, Math.round(m.signups ?? 0)),
+          activeUsers: Math.max(0, Math.round(m.activeUsers ?? 0)), knownIssues: p.knownIssues, costPerActiveUserCents: cents(m.costPerActiveUserMonthly ?? 0),
+        };
+        companyRepo.create(store, c, player.id);
+        for (const x of p.monthlyCosts) addMonthly(playerAccountId, null, `${p.name}: ${x.label}`, cents(x.amount));
+        addMonthly(playerAccountId, null, USAGE(c), c.activeUsers * c.costPerActiveUserCents);
+      }
+    },
+    template: STARTUP_TEMPLATE,
+  },
+  weekly(api, _since, until) {
+    const me = api.ctx.player.id;
+    const lines: string[] = [];
+    for (const c of st(api).companiesOf(me).filter((x) => x.productStage !== 'idea' || x.url)) {
+      const before = { signups: c.signups, active: c.activeUsers };
+      const organic = Math.floor(api.random(`${c.id}:organic:${until}`) * (c.url ? 4 : 1) * STAGE_REACH[c.productStage]);
+      const kept = Math.round(c.activeUsers * retention(c));
+      const signups = c.signups + organic;
+      st(api).update(c.id, { signups, activeUsers: Math.min(signups, kept + Math.round(organic * activation(c))) }, api.ctx.now);
+      syncUsageCost(api, c);
+      const d = (a: number, b: number) => `${a} → ${b}${b !== a ? ` (${b > a ? '+' : ''}${b - a})` : ''}`;
+      lines.push(`${c.name}: signups ${d(before.signups, c.signups)} · active ${d(before.active, c.activeUsers)}${c.costPerActiveUserCents ? ` · usage costs ${api.money(c.activeUsers * c.costPerActiveUserCents)}/month` : ''}`
+        + `${c.knownIssues.length ? ` · ${c.knownIssues.length} known problem${c.knownIssues.length === 1 ? '' : 's'}` : ''}`);
+    }
+    return lines;
   },
   offerKinds,
   entities: {
@@ -232,7 +346,9 @@ export const startupPack: GamePack = {
     return companyRepo.of(store, playerId).map((c) => {
       const mine = companyRepo.holdings(store, c.id).find((h) => h.characterId === playerId)!;
       const cash = store.getAccountOf(gameId, 'entity', c.id)?.balanceCents ?? 0;
-      return `${c.name} ${pct(mine.shares, c.totalShares)} · €${(cash / 100).toLocaleString('en-GB', { minimumFractionDigits: 2 })} · ${c.productStage}`;
+      const users = c.signups || c.activeUsers ? ` · ${c.signups} signups / ${c.activeUsers} active` : '';
+      if (!c.incorporated) return `${c.name} (side project) · ${c.productStage}${users}`;
+      return `${c.name} ${pct(mine.shares, c.totalShares)} · €${(cash / 100).toLocaleString('en-GB', { minimumFractionDigits: 2 })} · ${c.productStage}${users}`;
     });
   },
   prompts: {
@@ -251,7 +367,8 @@ export const startupPack: GamePack = {
     const names = new Map(store.listCharacters(gameId).map((c) => [c.id, c.name]));
     const out: string[] = ['── COMPANIES (startup pack) ──'];
     for (const c of companyRepo.list(store, gameId)) {
-      out.push(`  ${c.name} (${c.productStage}, founded ${c.foundedGameTime}, ${c.totalShares} shares) — ${c.description}`,
+      out.push(`  ${c.name} (${c.incorporated ? '' : 'side project, '}${c.productStage}, since ${c.foundedGameTime}, ${c.totalShares} shares) — ${c.description}${c.url ? ` · ${c.url}` : ''}`,
+        `    users: ${c.signups} signups, ${c.activeUsers} active · usage cost ${c.costPerActiveUserCents}c/active user/month · known problems: ${c.knownIssues.join('; ') || '-'}`,
         ...companyRepo.holdings(store, c.id).map((s) => `    ${names.get(s.characterId)} ${s.shares} shares = ${pct(s.shares, c.totalShares)} (${s.role})`));
     }
     return out.join('\n');

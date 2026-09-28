@@ -22,7 +22,7 @@ The code has two layers:
 
 Two packs ship:
 
-- **Startup** (`src/packs/startup/`) — companies, cap tables and product stage, plus four offer kinds: cofounder, job, customer purchase and investment. Its example world is an 18-year-old in the real Milan, September 2026, with €2,500.
+- **Startup** (`src/packs/startup/`) — a product with real numbers (signups, active users, known problems, usage costs), companies and cap tables, plus four offer kinds: cofounder, job, customer purchase and investment. Its default world starts where the journey starts: Felipe, 18, in Milan on Monday 28 September 2026. He has built Grade Economy alone (an MVP and landing page, 14 signups, 2 active users), has €600 and no network, and his parents want an answer about university by 15 October.
 - **Open World** (`src/packs/open/`) — the engine's generic mechanics only (people, money, promises, deals, decisions, world turns). Use it for any other world: fantasy, science fiction, history, or a known fictional universe used as a reference.
 
 **The world itself is designed with you.** `npm start -- new` opens the **World Creation Copilot**, a conversation that builds a draft of the world; you approve a final summary and the game is created from it (see *World creation* below).
@@ -42,7 +42,7 @@ export OPENAI_API_KEY=sk-...  # live play / smoke test only
 export OPENAI_MODEL=gpt-6-luna   # optional (default gpt-6-luna)
 npm start -- new              # design a world with the Copilot, approve it, play (resumes an unfinished draft)
 npm start -- new --fresh      # start a new draft even if one is unfinished
-npm start -- new --quick      # skip the conversation: Felipe, 18, Milan, Sunday 27 Sep 2026 09:14
+npm start -- new --quick      # skip the conversation: the default Startup world (Felipe, his MVP, €600, Milan)
 npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
 npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
@@ -52,6 +52,21 @@ npm run smoke                 # live multi-session run incl. a Copilot conversat
 The database defaults to `data/startup.db`. Override it with `--db <path>` or `STARTUP_DB`.
 
 You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (medium).
+
+## The starting position, money and the week
+
+These parts are generic engine features; each pack configures them.
+
+- **Start where the story starts.** World creation establishes what the character has already made (`player.assets`, with real numbers and honest known problems), the pack's starting stage, open leads with dates, pressures and the people the opening needs. Startup's stages are `idea`, `mvp` (the default) and `first_users`. A product asset becomes a *side project* with its URL, users, problems and usage costs. It becomes a company when the player registers it.
+- **A price book.** Approximate prices for the world are proposed at creation, approved with the summary and stored in `prices`. A known item always costs about the same: a payment more than 3× off is refused. A new item is remembered at the price first paid.
+- **Running costs and income.** Living costs (phone, transport, "daily life") and product costs (domain, usage per active user) are monthly flows. Pocket money is income. Everything lands on the 1st and is reported as one line per payday. Product usage costs follow active users: success costs money.
+- **The calendar.** Open leads with a date (talks, meetups, hackathons, a family dinner) are scheduled opportunities. They appear under UPCOMING in the interpreter's briefing and in the opening. Weekly ones come round again. Nobody has to go; going there is moving there at that time, and the people you meet are generated then.
+- **The week in review.** Every Monday 08:00 the world turn runs the pack's weekly dynamics. For Startup, users arrive organically and churn, depending on known problems. Then it reports money spent and received, monthly costs vs income, net burn and runway, the product's numbers and what's coming up.
+- **Player actions:**
+  - `research` — generic; the findings become the player's notes, as beliefs rather than world truth.
+  - `promote_product` — Startup; the game rolls how many people sign up and how many start using the product.
+  - `improve_product` — Startup; fixes a known problem, or records one the player discovered.
+  - `found_company` — Startup; registers the side project as a company.
 
 ## World creation
 

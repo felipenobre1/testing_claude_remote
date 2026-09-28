@@ -2,9 +2,9 @@ import type { Store } from '../db/store.ts';
 import { DecisionStateProposalSchema, DirectorProposalSchema, type Appraisal, type DecisionState, type DirectorProposal, type Outcome } from '../domain/schemas.ts';
 import type { StoryThread } from '../domain/types.ts';
 import { NEGATIVE, POSITIVE, resolveDecision } from './decision.ts';
-import type { WorldPlanner } from './planner.ts';
+import { formatMoney, opportunityLine, upcoming, type WorldPlanner } from './planner.ts';
 import type { RngFactory } from './random.ts';
-import { addMinutes, formatGameTime, newId } from './util.ts';
+import { addMinutes, formatGameTime, newId, nextWeekStart } from './util.ts';
 import { decisionStateProblems } from './validate.ts';
 
 // ============================================================================
@@ -59,6 +59,7 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
   // 2. Scheduled developments that fall due.
   const due = store.listScheduled(gameId, 'pending').filter((i) => i.dueGameTime <= to);
   let directorDue = false;
+  const weeks: { since: string; until: string }[] = [];
   for (const item of due) {
     p.scheduleDone(item.id);
     if (item.kind === 'message') {
@@ -66,6 +67,13 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
       const text = String(item.payload.text);
       deliverMessage(p, fromId, text, item.dueGameTime, item.threadId);
       trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'delivered' });
+    } else if (item.kind === 'opportunity') {
+      // Opportunities pass whether or not anyone goes; weekly ones come round again.
+      if (item.payload.repeatsWeekly) p.schedule(addMinutes(item.dueGameTime, 7 * 1440), 'opportunity', item.payload);
+      trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'passed' });
+    } else if (item.kind === 'weekly_report') {
+      weeks.push({ since: String(item.payload.since ?? item.dueGameTime), until: item.dueGameTime });
+      trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'report' });
     } else if (item.kind === 'director_review') {
       directorDue = true;
       trace.scheduled.push({ id: item.id, kind: item.kind, due: item.dueGameTime, result: 'review due' });
@@ -109,7 +117,20 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
     trace.deferred.push({ offerId: o.id, outcome: res.outcome, roll: res.roll });
   }
 
-  // 5. The Story Director reviews the world (at most once per game day).
+  // 5. A new game week: pack dynamics (e.g. users come and go), then the week in review.
+  weeks.sort((a, b) => a.until.localeCompare(b.until));
+  const packLines: string[] = [];
+  for (const w of weeks) {
+    const lines = p.ctx.pack.weekly?.(p, w.since, w.until) ?? [];
+    packLines.push(...(weeks.length > 1 ? lines.map((l) => `(${w.until.slice(5, 10)}) ${l}`) : lines));
+  }
+  if (weeks.length) p.results.push(weeklyReport(p, store, weeks[0]!.since, weeks.at(-1)!.until, packLines));
+  const lastWeek = weeks.at(-1)?.until;
+  if (lastWeek || !store.listScheduled(gameId, 'pending').some((i) => i.kind === 'weekly_report')) {
+    p.schedule(nextWeekStart(lastWeek ?? to), 'weekly_report', { since: lastWeek ?? to });
+  }
+
+  // 6. The Story Director reviews the world (at most once per game day).
   if (deps.director) {
     const pending = store.listScheduled(gameId, 'pending').some((i) => i.kind === 'director_review' && i.dueGameTime > to);
     if (directorDue) {
@@ -118,6 +139,44 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
     if (directorDue || !pending) p.schedule(nextDirectorTime(to), 'director_review', {});
   }
   return trace;
+}
+
+/** The week in review: money in and out, monthly burn and runway, pack lines, what's coming up. Deterministic. */
+export function weeklyReport(p: WorldPlanner, store: Store, since: string, until: string, packLines: string[]): string {
+  const me = p.ctx.player.id;
+  const acct = p.account('character', me);
+  const sym = p.ctx.pack.currency.symbol;
+  const m = (c: number) => formatMoney(c, sym);
+  const lines = [`📅 WEEK IN REVIEW — ${formatGameTime(since).split(',').slice(0, 2).join(',')} → ${formatGameTime(until).split(',').slice(0, 2).join(',')}`];
+  if (acct) {
+    const planned = p.ops.flatMap((o) => (o.op === 'transfer' ? [o.tx] : []));
+    const committed = store.listTransactions(p.ctx.gameId);
+    const txs = [...committed, ...planned.filter((t) => !committed.some((c) => c.id === t.id))]
+      .filter((t) => t.gameTime > since && t.gameTime <= until && (t.fromAccountId === acct.id || t.toAccountId === acct.id));
+    const byItem = new Map<string, number>();
+    let spent = 0, received = 0;
+    for (const t of txs) {
+      if (t.fromAccountId === acct.id) {
+        spent += t.amountCents;
+        const k = t.description.replace(/ \(monthly\)$/, '');
+        byItem.set(k, (byItem.get(k) ?? 0) + t.amountCents);
+      } else received += t.amountCents;
+    }
+    const top = [...byItem.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${m(v)}`).join(', ');
+    lines.push(`Money: spent ${m(spent)}${top ? ` (${top}${byItem.size > 4 ? ', …' : ''})` : ''} · received ${m(received)} · cash now ${m(acct.balanceCents)}`);
+    const costs = p.outgoing(acct.id).reduce((n, r) => n + r.amountCents, 0);
+    const income = p.incoming(acct.id).reduce((n, r) => n + r.amountCents, 0);
+    const net = income - costs;
+    const runway = net >= 0 ? 'no monthly burn' : (() => {
+      const months = acct.balanceCents / -net;
+      return months < 2 ? `runway ≈ ${Math.max(0, Math.floor(months * 4.3))} weeks` : `runway ≈ ${Math.floor(months)} months`;
+    })();
+    lines.push(`Monthly: costs ${m(costs)} · income ${m(income)} · net ${net >= 0 ? '+' : ''}${m(net)}/month → ${runway}`);
+  }
+  lines.push(...packLines);
+  const soon = upcoming(store, p.ctx.gameId, until, 7, p);
+  if (soon.length) lines.push('Coming up:', ...soon.map((i) => `  • ${opportunityLine(i, p)}`));
+  return lines.join('\n');
 }
 
 function observersOf(p: WorldPlanner, t: StoryThread): string[] {

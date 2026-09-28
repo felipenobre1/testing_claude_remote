@@ -498,7 +498,7 @@ export class Store {
     return this.all('SELECT * FROM recurring_payments WHERE game_id = :gameId ORDER BY rowid', { gameId }).map(mapRecurring);
   }
   updateRecurringPayment(r: RecurringPayment): void {
-    this.run('UPDATE recurring_payments SET next_due_game_time = :nextDueGameTime, active = :active WHERE id = :id', { ...r, active: r.active ? 1 : 0 });
+    this.run('UPDATE recurring_payments SET next_due_game_time = :nextDueGameTime, active = :active, amount_cents = :amountCents WHERE id = :id', { ...r, active: r.active ? 1 : 0 });
   }
 
   // ---------- world creation ----------
@@ -524,6 +524,14 @@ export class Store {
   }
   listDraftMessages(draftId: string): { role: 'player' | 'copilot'; text: string }[] {
     return this.all('SELECT role, text FROM draft_messages WHERE draft_id = :d ORDER BY seq', { d: draftId }).map((r) => ({ role: r.role, text: r.text }));
+  }
+  upsertPrice(p: { gameId: string; item: string; priceCents: number; source: string; gameTime: string }): void {
+    this.run(`INSERT INTO prices (game_id, item_key, item, price_cents, source, created_game_time) VALUES (:g, :k, :item, :c, :src, :t)
+      ON CONFLICT (game_id, item_key) DO NOTHING`, { g: p.gameId, k: priceKey(p.item), item: p.item, c: p.priceCents, src: p.source, t: p.gameTime });
+  }
+  listPrices(gameId: string): PriceEntry[] {
+    return this.all('SELECT * FROM prices WHERE game_id = :g ORDER BY rowid', { g: gameId })
+      .map((r) => ({ key: r.item_key, item: r.item, priceCents: r.price_cents, source: r.source }));
   }
   insertWorldSeed(gameId: string, draftId: string | null, packId: string, seed: unknown, now: string): void {
     this.run('INSERT INTO world_seeds (game_id, draft_id, pack_id, seed_json, created_at) VALUES (:g, :d, :p, :s, :now)',
@@ -692,6 +700,10 @@ function mapScheduled(r: Row): ScheduledItem {
     status: r.status, createdGameTime: r.created_game_time, createdAt: r.created_at,
   };
 }
+export interface PriceEntry { key: string; item: string; priceCents: number; source: string }
+/** Price-book key: lowercase words only, so "Espresso at a bar" and "espresso at a bar." are the same item. */
+export const priceKey = (item: string) => item.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
 export interface DraftRow {
   id: string;
   status: 'drafting' | 'awaiting_approval' | 'finalized' | 'abandoned';

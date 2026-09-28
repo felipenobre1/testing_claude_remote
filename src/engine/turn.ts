@@ -162,7 +162,7 @@ export class Engine {
     // The world planner simulates resource/offer/promise/thread changes on a copy of canonical state.
     const econCtx: PlanContext = {
       store, pack: world.pack, gameId: game.id, turnId: trace.turnId, now, gameTime: game.gameTime, location: pp.scene.location,
-      player, characters: everyone, interaction: null,
+      player, characters: everyone, interaction: null, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`,
     };
     const economy = new WorldPlanner(econCtx);
 

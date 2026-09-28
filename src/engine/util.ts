@@ -17,6 +17,24 @@ export function formatGameTime(gameTime: string): string {
   return `${date}, ${gameTime.slice(11, 16)}`;
 }
 
+/** 09:00 on the first day of the month after `gameTime` — when monthly bills and income land. */
+export function firstOfNextMonth(gameTime: string): string {
+  const d = new Date(`${gameTime.slice(0, 7)}-01T09:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  return d.toISOString().slice(0, 16);
+}
+
+/** The next Monday 08:00 strictly after `gameTime` — the start of a new game week. */
+export function nextWeekStart(gameTime: string): string {
+  const d = new Date(`${gameTime.slice(0, 10)}T08:00:00Z`);
+  const dow = d.getUTCDay(); // 0 = Sunday
+  d.setUTCDate(d.getUTCDate() + ((8 - dow) % 7 || 7));
+  const t = d.toISOString().slice(0, 16);
+  // Monday before 08:00 → the same day's 08:00 is next.
+  const today = `${gameTime.slice(0, 10)}T08:00`;
+  return new Date(`${today}:00Z`).getUTCDay() === 1 && today > gameTime ? today : t;
+}
+
 // ---- lightweight relevance signals (no embeddings in M1) ----
 
 const STOPWORDS = new Set(

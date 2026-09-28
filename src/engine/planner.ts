@@ -1,10 +1,11 @@
-import type { Store } from '../db/store.ts';
+import { priceKey, type PriceEntry, type Store } from '../db/store.ts';
 import type { DecisionState, PlayerAction } from '../domain/schemas.ts';
 import type {
-  Account, Character, DecisionRecord, GameEvent, Interaction, Obligation, Offer, RecurringPayment, ScheduledItem, StoryThread, Transaction,
+  Account, Character, DecisionRecord, GameEvent, Interaction, Knowledge, Obligation, Offer, RecurringPayment, ScheduledItem, StoryThread, Transaction,
 } from '../domain/types.ts';
 import type { GamePack, PackTurnState } from '../packs/types.ts';
 import { MAX_ATTEMPTS, reconsiderAfterMinutes, type Resolution } from './decision.ts';
+import { seededRng, type RngFactory } from './random.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 
 // ============================================================================
@@ -47,7 +48,9 @@ export type PlannedOp =
   | { op: 'update_thread'; thread: StoryThread }
   | { op: 'link_thread_event'; threadId: string; eventId: string }
   | { op: 'schedule'; item: ScheduledItem }
-  | { op: 'schedule_done'; id: string };
+  | { op: 'schedule_done'; id: string }
+  | { op: 'upsert_price'; gameId: string; item: string; priceCents: number; gameTime: string }
+  | { op: 'upsert_knowledge'; knowledge: Knowledge };
 
 export interface PlanContext {
   store: Store;
@@ -60,7 +63,13 @@ export interface PlanContext {
   player: Character;
   characters: Character[]; // everyone known this turn (incl. a character generated this turn)
   interaction: Interaction | null; // current conversation (offers/promises need a listener)
+  /** Seeded randomness for mechanics (same request ⇒ same result). Defaults to seeds from the turn id. */
+  rng?: RngFactory;
+  seedBase?: string;
 }
+
+/** A paid price may differ from the known one (sales, a fancier place) but not wildly. */
+export const PRICE_TOLERANCE = 3;
 
 export class WorldPlanner {
   readonly ops: PlannedOp[] = [];
@@ -76,6 +85,7 @@ export class WorldPlanner {
   private recurring = new Map<string, RecurringPayment>();
   private threads = new Map<string, StoryThread>();
   private decisionStates = new Map<string, DecisionState>();
+  private prices = new Map<string, PriceEntry>();
 
   constructor(ctx: PlanContext) {
     this.ctx = ctx;
@@ -85,8 +95,15 @@ export class WorldPlanner {
     for (const r of store.listRecurringPayments(gameId)) this.recurring.set(r.id, { ...r });
     for (const o of store.listOffers(gameId)) this.offers.set(o.id, { ...o });
     for (const t of store.listThreads(gameId)) this.threads.set(t.id, { ...t, participantIds: [...t.participantIds], resolution: structuredClone(t.resolution) });
+    for (const p of store.listPrices(gameId)) this.prices.set(p.key, p);
     this.packState = ctx.pack.createTurnState(store, gameId);
   }
+
+  /** A seeded roll in [0, 1) for a named mechanic this turn. */
+  random(label: string): number {
+    return (this.ctx.rng ?? seededRng)(`${this.ctx.seedBase ?? this.ctx.turnId}:${label}`)();
+  }
+  knownPrices(): PriceEntry[] { return [...this.prices.values()]; }
 
   // ---------- reads (store + this turn's plan) ----------
   money(cents: number) { return formatMoney(cents, this.ctx.pack.currency.symbol); }
@@ -155,6 +172,14 @@ export class WorldPlanner {
     this.recurring.set(r.id, r);
     this.ops.push({ op: 'create_recurring', recurring: { ...r } });
   }
+  /** Creates, updates or stops (cents ≤ 0) the monthly flow with this description between these accounts. */
+  setRecurring(from: Account | null, to: Account | null, description: string, cents: number) {
+    const r = [...this.recurring.values()].find((x) => x.active && x.fromAccountId === (from?.id ?? null) && x.toAccountId === (to?.id ?? null) && x.description === description);
+    if (!r) { if (cents > 0) this.addRecurring(from, to, description, cents); return; }
+    if (cents > 0 && r.amountCents === cents) return;
+    if (cents > 0) r.amountCents = cents; else r.active = false;
+    this.ops.push({ op: 'update_recurring', recurring: { ...r } });
+  }
   saveDecisionState(characterId: string, domain: string, state: DecisionState) {
     this.decisionStates.set(`${characterId}/${domain}`, state);
     this.ops.push({ op: 'upsert_decision_state', gameId: this.ctx.gameId, characterId, domain, state });
@@ -199,6 +224,16 @@ export class WorldPlanner {
         if (amount <= 0) return 'pay: amount must be positive';
         const p = this.payer(act.fromEntityName);
         if (typeof p === 'string') return this.reject(a, `Can't pay ${this.money(amount)}: ${p}.`), null;
+        // The world's price book keeps prices consistent: a known item costs about what it cost before.
+        const known = this.prices.get(priceKey(act.description));
+        if (known && known.priceCents > 0 && !act.recurringMonthly && (amount > known.priceCents * PRICE_TOLERANCE || amount * PRICE_TOLERANCE < known.priceCents)) {
+          return `pay: "${known.item}" costs about ${this.money(known.priceCents)} in this world, not ${this.money(amount)}`;
+        }
+        if (!known && !act.recurringMonthly) {
+          const entry = { key: priceKey(act.description), item: act.description, priceCents: amount, source: 'paid' };
+          this.prices.set(entry.key, entry);
+          this.ops.push({ op: 'upsert_price', gameId: this.ctx.gameId, item: act.description, priceCents: amount, gameTime: this.ctx.gameTime });
+        }
         if (p.account.balanceCents < amount) return this.reject(a, `Can't pay ${this.money(amount)} for ${act.description}: ${p.label === 'you' ? 'you have' : `${p.label} has`} only ${this.money(p.account.balanceCents)}.`), null;
         this.move(p.account, null, amount, act.description, act.recurringMonthly ? 'recurring' : 'expense');
         if (act.recurringMonthly) this.addRecurring(p.account, null, act.description, amount);
@@ -252,6 +287,18 @@ export class WorldPlanner {
           this.move(personal, this.ensureAccount('character', o.creditorId), o.amountCents, `promise: ${o.description}`, 'promise');
         }
         this.resolveObligation(o);
+        return null;
+      }
+      case 'research': {
+        // What the player character learned. Beliefs, not world truth: research can be incomplete or wrong.
+        const act = a as Extract<PlayerAction, { action: 'research' }>;
+        const k: Knowledge = {
+          id: newId('know'), gameId: this.ctx.gameId, characterId: me, topic: `research: ${act.topic}`.slice(0, 120), belief: act.findings.join(' • '),
+          confidence: 0.6, aboutCharacterId: null, factId: null, source: 'research', sourceEventId: null, gameTime: this.ctx.gameTime, createdAt: this.ctx.now, updatedAt: this.ctx.now,
+        };
+        this.ops.push({ op: 'upsert_knowledge', knowledge: k });
+        this.event('research', `${player.name} researched ${act.topic}.`, [me], [{ characterId: me, role: 'actor' }], 1);
+        this.results.push(`📝 Notes — ${act.topic}:\n${act.findings.map((f) => `   • ${f}`).join('\n')}`);
         return null;
       }
       default: {
@@ -418,28 +465,41 @@ export class WorldPlanner {
   passTime(from: string, to: string) {
     if (to <= from) return;
     const ownerOf = (a: Account) => (a.ownerKind === 'entity' ? this.ctx.pack.entities.name(this, a.ownerId) : a.ownerId === this.ctx.player.id ? 'you' : this.name(a.ownerId));
-    for (const r of [...this.recurring.values()].filter((x) => x.active)) {
-      let guard = 0;
-      let changed = false;
-      while (r.nextDueGameTime <= to && guard++ < 24) {
-        changed = true;
-        const payer = r.fromAccountId ? this.accounts.get(r.fromAccountId)! : null;
-        const payee = r.toAccountId ? this.accounts.get(r.toAccountId)! : null;
-        if (!payer) {
-          this.move(null, payee, r.amountCents, `${r.description} (monthly)`, 'income', r.nextDueGameTime);
-          this.results.push(`⏰ ${formatGameTime(r.nextDueGameTime)}: ${r.description} ${this.money(r.amountCents)} received by ${ownerOf(payee!)} · balance ${this.money(payee!.balanceCents)}`);
-        } else if (payer.balanceCents >= r.amountCents) {
-          this.move(payer, payee, r.amountCents, `${r.description} (monthly)`, 'recurring', r.nextDueGameTime);
-          this.results.push(`⏰ ${formatGameTime(r.nextDueGameTime)}: ${r.description} ${this.money(r.amountCents)} charged to ${ownerOf(payer)} · balance ${this.money(payer.balanceCents)}`);
-        } else {
-          r.active = false;
-          this.results.push(`⚠ ${formatGameTime(r.nextDueGameTime)}: ${r.description} (${this.money(r.amountCents)}) could not be paid — ${ownerOf(payer)} has ${this.money(payer.balanceCents)}. It has been stopped.`);
-          this.event('money', `A payment of ${this.money(r.amountCents)} for ${r.description} failed and was stopped.`, [this.ctx.player.id], [{ characterId: this.ctx.player.id, role: 'actor' }], 3, r.nextDueGameTime);
-          break;
-        }
-        r.nextDueGameTime = addMonths(r.nextDueGameTime, 1);
+    // Monthly flows, in time order; everything landing at the same moment for the same owner is reported as one line.
+    const groups = new Map<string, { at: string; owner: string; account: Account; balance: number; out: [string, number][]; in: [string, number][] }>();
+    const touched = new Set<RecurringPayment>();
+    for (let guard = 0; guard < 500; guard++) {
+      const r = [...this.recurring.values()].filter((x) => x.active && x.nextDueGameTime <= to).sort((a, b) => a.nextDueGameTime.localeCompare(b.nextDueGameTime))[0];
+      if (!r) break;
+      touched.add(r);
+      const at = r.nextDueGameTime;
+      const payer = r.fromAccountId ? this.accounts.get(r.fromAccountId)! : null;
+      const payee = r.toAccountId ? this.accounts.get(r.toAccountId)! : null;
+      const group = (a: Account) => {
+        const k = `${at}|${a.id}`;
+        if (!groups.has(k)) groups.set(k, { at, owner: ownerOf(a), account: a, balance: a.balanceCents, out: [], in: [] });
+        return groups.get(k)!;
+      };
+      if (payer && payer.balanceCents < r.amountCents) {
+        r.active = false;
+        this.results.push(`⚠ ${formatGameTime(at)}: ${r.description} (${this.money(r.amountCents)}) could not be paid — ${ownerOf(payer)} has ${this.money(payer.balanceCents)}. It has been stopped.`);
+        this.event('money', `A payment of ${this.money(r.amountCents)} for ${r.description} failed and was stopped.`, [this.ctx.player.id], [{ characterId: this.ctx.player.id, role: 'actor' }], 3, at);
+        continue;
       }
-      if (changed) this.ops.push({ op: 'update_recurring', recurring: { ...r } });
+      this.move(payer, payee, r.amountCents, `${r.description} (monthly)`, payer ? 'recurring' : 'income', at);
+      if (payer) { const g = group(payer); g.out.push([r.description, r.amountCents]); g.balance = payer.balanceCents; }
+      if (payee) { const g = group(payee); g.in.push([r.description, r.amountCents]); g.balance = payee.balanceCents; }
+      r.nextDueGameTime = addMonths(at, 1);
+    }
+    for (const r of touched) this.ops.push({ op: 'update_recurring', recurring: { ...r } });
+    for (const g of groups.values()) {
+      const sum = (xs: [string, number][]) => xs.reduce((n, [, c]) => n + c, 0);
+      const list = (xs: [string, number][]) => xs.map(([d, c]) => `${d} ${this.money(c)}`).join(', ');
+      const parts = [
+        g.out.length ? `monthly costs ${this.money(sum(g.out))} (${list(g.out)})` : null,
+        g.in.length ? `received ${this.money(sum(g.in))} (${list(g.in)})` : null,
+      ].filter(Boolean).join(' · ');
+      this.results.push(`⏰ ${formatGameTime(g.at)} — ${g.owner === 'you' ? '' : `${g.owner}: `}${parts} · balance ${this.money(g.balance)}`);
     }
     for (const o of this.obligations.values()) {
       if (o.status !== 'open' || !o.dueGameTime || o.overdueNotified || o.dueGameTime > to) continue;
@@ -475,6 +535,8 @@ export function applyOps(store: Store, planner: WorldPlanner): { table: string; 
       case 'link_thread_event': store.linkThreadEvent(o.threadId, o.eventId); writes.push({ table: 'thread_events', op: 'insert', id: `${o.threadId}→${o.eventId}` }); break;
       case 'schedule': store.insertScheduled(o.item); writes.push({ table: 'world_schedule', op: 'insert', id: o.item.id, note: `${o.item.kind} @ ${o.item.dueGameTime}` }); break;
       case 'schedule_done': store.setScheduledStatus(o.id, 'done'); writes.push({ table: 'world_schedule', op: 'update', id: o.id, note: 'done' }); break;
+      case 'upsert_price': store.upsertPrice({ gameId: o.gameId, item: o.item, priceCents: o.priceCents, source: 'paid', gameTime: o.gameTime }); writes.push({ table: 'prices', op: 'upsert', id: priceKey(o.item), note: money(o.priceCents) }); break;
+      case 'upsert_knowledge': { const r = store.upsertKnowledge(o.knowledge); writes.push({ table: 'knowledge', op: r.op, id: r.id, note: o.knowledge.topic }); break; }
     }
   }
   return writes;
@@ -528,5 +590,26 @@ export function playerWorldBriefing(p: WorldPlanner, gameTime: string): string {
     lines.push(`[${o.id}] Counter-offer from ${p.name(o.fromCharacterId)}: ${p.describeOffer(o)} — "${o.description}" (answer with respond_to_offer)`);
   }
   for (const o of p.allObligations().filter((x) => x.status === 'open' && (x.debtorId === me || x.creditorId === me))) lines.push(obligationLine(p, o, gameTime));
+  const soon = upcoming(p.ctx.store, p.ctx.gameId, gameTime, 14);
+  if (soon.length) lines.push('UPCOMING (on the calendar; going there = moving to that place at that time):', ...soon.map((i) => `- ${opportunityLine(i, p)}`));
+  const prices = p.knownPrices();
+  if (prices.length) lines.push(`KNOWN PRICES (use these amounts when paying for these items): ${prices.map((x) => `${x.item} ${p.money(x.priceCents)}`).join('; ')}`);
   return lines.join('\n');
+}
+
+/** Opportunities on the calendar in the next `days` days, soonest first. */
+export function upcoming(store: Store, gameId: string, gameTime: string, days: number, p?: WorldPlanner): ScheduledItem[] {
+  const until = addMinutes(gameTime, days * 1440);
+  // Include what this turn has already scheduled or completed (e.g. a weekly event that just came round again).
+  const done = new Set(p?.ops.flatMap((o) => (o.op === 'schedule_done' ? [o.id] : [])));
+  const planned = p?.ops.flatMap((o) => (o.op === 'schedule' ? [o.item] : [])) ?? [];
+  return [...store.listScheduled(gameId, 'pending'), ...planned]
+    .filter((i) => !done.has(i.id) && i.kind === 'opportunity' && i.dueGameTime >= gameTime && i.dueGameTime <= until)
+    .sort((a, b) => a.dueGameTime.localeCompare(b.dueGameTime));
+}
+
+export function opportunityLine(i: ScheduledItem, p?: WorldPlanner): string {
+  const x = i.payload as { title: string; description?: string; location?: string | null; cost?: number | null };
+  const cost = typeof x.cost === 'number' && x.cost > 0 ? ` · entry ${p ? p.money(Math.round(x.cost * 100)) : x.cost}` : '';
+  return `${formatGameTime(i.dueGameTime)} — ${x.title}${x.location ? ` @ ${x.location}` : ''}${cost}${x.description ? `: ${x.description}` : ''}`;
 }
