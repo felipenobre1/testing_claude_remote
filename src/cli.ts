@@ -19,6 +19,8 @@ const USAGE = `Living Story Engine
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
   npm start -- drafts                       list world drafts
+  npm start -- delete <gameId>              delete one game permanently (asks to confirm; --yes skips)
+  npm start -- delete --all                 delete ALL games and world drafts (asks to confirm; --yes skips)
   npm start -- inspect <what> [--game id]   inspect state without playing:
       turns | turn <n|last> [--full] | character <name> | context <name> | events | facts
 
@@ -213,6 +215,20 @@ async function main() {
       await play(reader(), engine, gameId, Boolean(flags.debug), `${formatStatus(store, gameId)}${last?.response ? `\n\nLast time:\n${last.response.text}` : ''}`);
     } else if (cmd === 'games') {
       console.log(store.listGames().map((g) => `${g.id}  [${g.packId}]  ${g.title}  ${g.gameTime}  rev ${g.revision}`).join('\n') || '(no games)');
+    } else if (cmd === 'delete') {
+      const games = store.listGames();
+      const all = Boolean(flags.all);
+      const target = all ? null : games.find((g) => g.id === rest[0]);
+      if (!all && !target) {
+        return console.error(rest[0] ? `No game ${rest[0]}. See: npm start -- games` : 'Usage: npm start -- delete <gameId>   or   npm start -- delete --all');
+      }
+      const what = all ? `ALL ${games.length} game(s) and ${store.listDrafts().length} world draft(s)` : `${target!.id} (${target!.title})`;
+      if (!flags.yes) {
+        const answer = await reader().next(`Permanently delete ${what}? This cannot be undone. Type "yes" to confirm: `);
+        if (answer?.trim().toLowerCase() !== 'yes') return console.log('Nothing deleted.');
+      }
+      if (all) store.deleteAllGames(); else store.deleteGame(target!.id);
+      console.log(`Deleted ${what}.`);
     } else if (cmd === 'drafts') {
       console.log(store.listDrafts().map((d) => `${d.id}  ${d.status}  v${d.version}  ${d.updatedAt}${d.gameId ? `  → ${d.gameId}` : ''}`).join('\n') || '(no drafts)');
     } else if (cmd === 'inspect') {

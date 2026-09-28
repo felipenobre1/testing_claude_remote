@@ -46,12 +46,14 @@ npm start -- new --quick      # skip the conversation: the default Startup world
 npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
 npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
+npm start -- delete <gameId>  # delete one game for good (asks to confirm)
+npm start -- delete --all     # delete every game and world draft (asks to confirm; --yes skips the question)
 npm run smoke                 # live multi-session run incl. a Copilot conversation; skips without key/network
 ```
 
 The database defaults to `data/startup.db`. Override it with `--db <path>` or `STARTUP_DB`.
 
-You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (low).
+You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (medium).
 
 ## The starting position, money and the week
 

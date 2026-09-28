@@ -31,6 +31,49 @@ export class Store {
     this.migrate();
   }
 
+  /**
+   * Permanently deletes one game and everything that belongs to it, in every table (engine and pack tables alike):
+   * rows carrying its game_id, then rows left pointing at deleted parents (participants, observers, shareholdings…).
+   */
+  deleteGame(gameId: string): void {
+    this.purge(() => {
+      for (const t of this.tables()) if (this.columns(t).includes('game_id')) this.db.prepare(`DELETE FROM "${t}" WHERE game_id = ?`).run(gameId);
+      this.db.prepare('DELETE FROM games WHERE id = ?').run(gameId);
+    });
+  }
+  /** Deletes every game and every world draft (the schema and migrations stay). */
+  deleteAllGames(): void {
+    this.purge(() => {
+      for (const t of this.tables()) if (this.columns(t).includes('game_id') || t === 'world_drafts' || t === 'games') this.db.prepare(`DELETE FROM "${t}"`).run();
+    });
+  }
+  private tables(): string[] {
+    return (this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[])
+      .map((r) => r.name).filter((t) => !['schema_migrations', 'pack_migrations'].includes(t));
+  }
+  private columns(table: string): string[] {
+    return (this.db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[]).map((c) => c.name);
+  }
+  private purge(deleteRoots: () => void): void {
+    this.db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.tx(() => {
+        deleteRoots();
+        // Remove orphans until nothing points at a missing parent.
+        for (let pass = 0; pass < 10; pass++) {
+          const orphans = this.db.prepare('PRAGMA foreign_key_check').all() as { table: string; rowid: number | null }[];
+          if (!orphans.length) return;
+          for (const o of orphans) {
+            if (o.rowid !== null) this.db.prepare(`DELETE FROM "${o.table}" WHERE rowid = ?`).run(o.rowid);
+          }
+        }
+        throw new Error('could not clean up all rows belonging to the deleted game(s)');
+      });
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+
   close(): void {
     this.db.close();
   }

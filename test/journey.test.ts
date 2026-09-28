@@ -184,3 +184,34 @@ test('world creation checks the starting position; the Copilot is told the stage
   assert.match(sys, /Start where the story starts, not before it/);
   assert.match(sys, /economy\.priceList/);
 });
+
+test('deleting a game removes every row that belongs to it and nothing else; delete-all clears games and drafts', async () => {
+  const keep = start();
+  const store = keep.store;
+  const other = keep.engine.newGame();
+  await keep.turn('I register the company', { intents: ['general_action'], minutesElapsed: 60, narration: '',
+    actions: [{ action: 'found_company', name: 'Grade Economy', description: 'Grades as salary', initialInvestment: 50 }] });
+  const rows = (gameId: string) => ({
+    characters: store.listCharacters(gameId).length, events: store.listEvents(gameId).length, companies: companyRepo.list(store, gameId).length,
+    seed: Boolean(store.getWorldSeed(gameId)), turns: store.listTurns(gameId).length,
+  });
+  const otherBefore = rows(other.game.id);
+  store.deleteGame(keep.game.id);
+  assert.equal(store.getGame(keep.game.id), undefined);
+  assert.deepEqual(rows(keep.game.id), { characters: 0, events: 0, companies: 0, seed: false, turns: 0 });
+  assert.deepEqual(rows(other.game.id), otherBefore);
+  const count = (t: string) => (store.get(`SELECT COUNT(*) AS n FROM ${t}`) as { n: number }).n;
+  assert.equal(count('shareholdings'), 1); // only the other game's founder
+  assert.deepEqual(store.all('PRAGMA foreign_key_check'), []);
+
+  store.insertDraft({ id: 'draft_x', status: 'drafting', draft: EMPTY_DRAFT, version: 0, now: 'x' });
+  store.addDraftMessage('draft_x', 'player', 'hi', 'x');
+  store.deleteAllGames();
+  for (const t of ['games', 'characters', 'events', 'event_observers', 'companies', 'shareholdings', 'world_seeds', 'world_drafts', 'draft_messages', 'prices', 'turns']) {
+    assert.equal(count(t), 0, t);
+  }
+  // The database still works afterwards.
+  const again = keep.engine.newGame();
+  assert.ok(store.getGame(again.game.id));
+  store.close();
+});

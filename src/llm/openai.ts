@@ -35,7 +35,7 @@ export class OpenAIProvider implements LLMProvider {
       decision_state: (process.env.OPENAI_EFFORT_DECISION_STATE as Effort) ?? 'low',
       npc_appraise: (process.env.OPENAI_EFFORT_APPRAISE as Effort) ?? 'medium',
       director: (process.env.OPENAI_EFFORT_DIRECTOR as Effort) ?? 'medium',
-      world_copilot: (process.env.OPENAI_EFFORT_COPILOT as Effort) ?? 'low',
+      world_copilot: (process.env.OPENAI_EFFORT_COPILOT as Effort) ?? 'medium',
       ...opts.effort,
     };
   }
