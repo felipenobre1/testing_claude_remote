@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Store } from '../src/db/store.ts';
-import { EMPTY_DRAFT, type CopilotTurn, type WorldDraft, type WorldSeed } from '../src/domain/world.ts';
+import { toWireSchema } from '../src/domain/schemas.ts';
+import { CopilotTurnSchema, EMPTY_DRAFT, NO_CHANGES, type CopilotTurn, type WorldDraft, type WorldSeed } from '../src/domain/world.ts';
 import { COPILOT_GREETING, WorldCreation } from '../src/engine/creation.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
@@ -11,9 +12,9 @@ import { PACKS } from '../src/packs/index.ts';
 import { openPack } from '../src/packs/open/index.ts';
 import { interp, lastPrompt, npc, tmpDbPath } from './helpers.ts';
 
-/** A scripted Copilot turn that sets every top-level field to the given draft's value. */
+/** A scripted Copilot turn that sends every section of the given draft. */
 const reply = (draft: WorldDraft, text = 'Noted.', intent: CopilotTurn['intent'] = 'discuss', approvalQuote: string | null = null): CopilotTurn =>
-  ({ reply: text, updates: Object.entries(draft).map(([path, v]) => ({ path, value: JSON.stringify(v) })), intent, approvalQuote });
+  ({ reply: text, changes: draft, reset: [], intent, approvalQuote });
 
 const count = (store: Store, table: string) => (store.get(`SELECT COUNT(*) AS n FROM ${table}`) as { n: number }).n;
 const CANONICAL = ['games', 'characters', 'events', 'facts', 'relationships', 'accounts', 'story_threads', 'world_seeds'];
@@ -243,17 +244,30 @@ test('quick start compiles the pack template through the same seed pipeline', ()
   store.close();
 });
 
-test('the Copilot sends only changes; a bad path or value is sent back for correction, never half-applied', async () => {
+test('the Copilot sends only changed sections, typed; unchanged sections stay; reset clears one', async () => {
   const s = setup();
   const { draftId } = s.creation.start();
-  s.llm.enqueue('world_copilot',
-    { reply: 'x', updates: [{ path: 'player.name', value: '"Kaleb"' }, { path: 'player.nickname', value: '"K"' }], intent: 'discuss', approvalQuote: null },
-    { reply: 'Kaleb, then.', updates: [{ path: 'player.name', value: '"Kaleb"' }, { path: 'setting.place', value: '"Arrakeen"' }], intent: 'discuss', approvalQuote: null });
-  const r = await s.creation.say(draftId, 'I am Kaleb, in Arrakeen');
-  assert.equal(r.text, 'Kaleb, then.');
-  assert.match(lastPrompt(s.llm, 'world_copilot'), /YOUR PREVIOUS OUTPUT WAS REJECTED:\n- updates: "player\.nickname" is not a field of the draft/);
+  s.llm.enqueue('world_copilot', reply(DESERT));
+  await s.creation.say(draftId, 'here is my world');
+  s.llm.enqueue('world_copilot', { reply: 'Cheaper water.', changes: { ...NO_CHANGES, economy: { priceList: [{ item: 'A litre of water', price: 2 }], livingCosts: [], income: [] } },
+    reset: ['actors'], intent: 'discuss', approvalQuote: null });
+  await s.creation.say(draftId, 'water costs 2, and drop Harun');
   const d = s.creation.draft(draftId);
-  assert.deepEqual([d.player.name, d.setting.place, d.player.age], ['Kaleb', 'Arrakeen', null]);
-  assert.equal(s.store.getDraft(draftId)!.version, 1);
+  assert.deepEqual(d.economy.priceList, [{ item: 'A litre of water', price: 2 }]);
+  assert.equal(d.actors.length, 0);
+  assert.equal(d.player.name, 'Kaleb'); // untouched sections keep their values
+  assert.equal(d.setting.place, 'Arrakeen, Arrakis');
   s.store.close();
+});
+
+test('the Copilot wire schema spells out every nested shape (the model cannot invent field names)', () => {
+  const w = toWireSchema(CopilotTurnSchema) as any;
+  const section = (name: string) => w.properties.changes.properties[name].anyOf.find((x: any) => x.type !== 'null');
+  const price = section('economy').properties.priceList.items;
+  assert.deepEqual([price.required, price.additionalProperties], [['item', 'price'], false]);
+  const lead = section('openLeads').items;
+  assert.deepEqual(lead.required.sort(), ['cost', 'description', 'location', 'repeatsWeekly', 'title', 'when']);
+  const asset = section('player').properties.assets.items;
+  assert.equal(asset.properties.metrics.type, 'array');
+  assert.deepEqual(asset.properties.monthlyCosts.items.required, ['label', 'amount']);
 });

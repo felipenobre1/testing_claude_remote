@@ -1,5 +1,5 @@
 import type { DraftRow, Store } from '../db/store.ts';
-import { applyDraftUpdates, CopilotTurnSchema, EMPTY_DRAFT, WorldDraftSchema, type CopilotTurn, type WorldDraft } from '../domain/world.ts';
+import { applyDraftChanges, CopilotTurnSchema, EMPTY_DRAFT, WorldDraftSchema, type CopilotTurn, type WorldDraft } from '../domain/world.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { GamePack } from '../packs/types.ts';
 import { newId } from './util.ts';
@@ -54,7 +54,7 @@ HOW TO WORK
 - Replies are short and conversational (a few sentences). No headings, no forms.
 
 THE DRAFT
-Send ONLY what changes, as updates: [{ path, value }]. path is a dot path into CURRENT DRAFT (e.g. "premise", "player.name", "setting.startDate", "player.assets", "economy.priceList"); value is the new value as JSON text (e.g. "\"Felipe\"", "18", "null", "[{...}]"). Arrays and objects are replaced as a whole, so send the full new array. updates = [] when nothing changes. Keep everything already decided unless the player changes it; when they revise something, update only that part and anything that depends on it. When they reset part of it ("forget the family"), set those fields back to null/[].
+Send ONLY what changes. changes has one entry per section of CURRENT DRAFT (premise, setting, style, player, economy, openLeads, actors, …): put the section's COMPLETE new value (same shape as in CURRENT DRAFT, all its fields) when anything in it changes, and null for sections that stay as they are. To clear a section entirely, list it in reset. Keep everything already decided unless the player changes it; when they revise something, update only that and what depends on it.
 Capture everything the player tells you in the same turn (name, place, money, product, URL…) — don't wait to be asked twice.
 setting.startDate is local time "YYYY-MM-DDTHH:MM" (map any calendar to that form); player.startingMoney is in major units of player.currency.
 initialSituations[].involves lists starting character names or "player". unresolvedQuestions: only what must be settled before the start.
@@ -264,9 +264,7 @@ export class WorldCreation {
       try { value = JSON.parse(res.rawText); } catch { feedback = ['output was not valid JSON']; continue; }
       const parsed = CopilotTurnSchema.safeParse(value);
       if (!parsed.success) { feedback = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`); continue; }
-      const applied = applyDraftUpdates(draft, parsed.data.updates);
-      if (!applied.draft) { feedback = applied.problems; continue; }
-      last = { ...parsed.data, draft: applied.draft };
+      last = { ...parsed.data, draft: applyDraftChanges(draft, parsed.data.changes, parsed.data.reset) };
       feedback = [];
       if ((last.intent === 'confirm_finalize' || last.intent === 'abandon') && !quoteIsFrom(last.approvalQuote, input)) {
         feedback.push(`intent ${last.intent} needs approvalQuote copied exactly from the player's latest message; if they did not say it, use discuss`);

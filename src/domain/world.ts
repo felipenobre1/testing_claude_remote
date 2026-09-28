@@ -135,44 +135,39 @@ export const EMPTY_DRAFT: WorldDraft = {
 
 export const COPILOT_INTENTS = ['discuss', 'summarize', 'request_finalize', 'confirm_finalize', 'abandon'] as const;
 
+const DRAFT_KEYS = Object.keys(WorldDraftSchema.shape) as (keyof WorldDraft)[];
+
 /**
- * One Copilot turn: its reply, the changes to the draft, and what the player wants now.
- * Only changes are sent back (not the whole draft) — much less for the model to write each turn.
+ * The draft's sections, each either its complete new value or null = unchanged. Typed like the draft itself,
+ * so structured output guarantees the shape; the model only writes the sections that change.
+ * (Fields that are already nullable are not wrapped twice; to clear one, list it in `reset`.)
  */
+export const DraftChangesSchema = z.object(
+  Object.fromEntries(DRAFT_KEYS.map((k) => { const f = WorldDraftSchema.shape[k] as z.ZodType; return [k, f.safeParse(null).success ? f : f.nullable()]; })) as { [K in keyof WorldDraft]: z.ZodNullable<z.ZodType<WorldDraft[K]>> },
+);
+export type DraftChanges = { [K in keyof WorldDraft]: WorldDraft[K] | null };
+
+/** One Copilot turn: its reply, the changed sections of the draft, and what the player wants now. */
 export const CopilotTurnSchema = z.object({
   reply: z.string().min(1).max(4000),
-  /** path = dot path into the draft ("player.name", "economy.priceList"); value = the new value as JSON text. Arrays/objects are replaced whole. */
-  updates: z.array(z.object({ path: z.string().min(1).max(80), value: z.string().max(12000) })).max(40),
+  changes: DraftChangesSchema,
+  /** Sections to clear back to empty (e.g. the player says "forget the family" → "actors"). */
+  reset: z.array(z.enum(DRAFT_KEYS as [keyof WorldDraft, ...(keyof WorldDraft)[]])).max(DRAFT_KEYS.length),
   intent: z.enum(COPILOT_INTENTS),
   /** For confirm_finalize / abandon: the player's own words expressing it (checked against their message). */
   approvalQuote: z.string().max(300).nullable(),
 });
 export type CopilotTurn = z.infer<typeof CopilotTurnSchema>;
 
-/** Applies Copilot updates to a draft. Returns the new draft, or problems phrased for the model. */
-export function applyDraftUpdates(current: WorldDraft, updates: CopilotTurn['updates']): { draft: WorldDraft | null; problems: string[] } {
-  const draft = structuredClone(current) as Record<string, unknown>;
-  const problems: string[] = [];
-  for (const u of updates) {
-    const keys = u.path.split('.');
-    let shape: unknown = EMPTY_DRAFT;
-    let target: Record<string, unknown> = draft;
-    let ok = true;
-    for (const [i, k] of keys.entries()) {
-      const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-      if (!isObj(shape) || !(k in shape)) { ok = false; break; }
-      if (i === keys.length - 1) break;
-      shape = shape[k];
-      if (!isObj(target[k])) target[k] = structuredClone(shape);
-      target = target[k] as Record<string, unknown>;
-    }
-    if (!ok) { problems.push(`updates: "${u.path}" is not a field of the draft`); continue; }
-    try { target[keys.at(-1)!] = JSON.parse(u.value); } catch { problems.push(`updates: value for "${u.path}" is not valid JSON`); }
-  }
-  if (problems.length) return { draft: null, problems };
-  const parsed = WorldDraftSchema.safeParse(draft);
-  if (!parsed.success) return { draft: null, problems: parsed.error.issues.map((i) => `draft.${i.path.join('.')}: ${i.message}`) };
-  return { draft: parsed.data, problems: [] };
+/** No changes (every section null). */
+export const NO_CHANGES = Object.fromEntries(DRAFT_KEYS.map((k) => [k, null])) as DraftChanges;
+
+/** Applies a Copilot turn's changes to a draft. Sections are replaced whole; reset sections return to empty. */
+export function applyDraftChanges(current: WorldDraft, changes: Partial<DraftChanges>, reset: readonly (keyof WorldDraft)[] = []): WorldDraft {
+  const next = structuredClone(current) as Record<string, unknown>;
+  for (const k of reset) next[k] = structuredClone(EMPTY_DRAFT[k]);
+  for (const k of DRAFT_KEYS) if (changes[k] !== null && changes[k] !== undefined) next[k] = changes[k];
+  return WorldDraftSchema.parse(next);
 }
 
 /** The approved design contract of a game. Written once at finalization, never rewritten. */
