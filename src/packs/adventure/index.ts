@@ -57,11 +57,27 @@ function attrBonus(p: Profile, skill: string): number {
 }
 
 type CheckOutcome = 'success' | 'partial' | 'failure';
-/** One uncertain act: skill + attribute − difficulty + a bounded seeded roll. */
-function check(api: WorldPlanner, p: Profile, skill: string, difficulty: number, label: string, opposed = 0): { outcome: CheckOutcome; margin: number } {
-  const margin = skillLevel(p, skill) + attrBonus(p, skill) - difficulty - opposed + api.random(`check:${label}`) * 8 - 3;
-  return { outcome: margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure', margin };
+const n1 = (x: number) => (Math.round(x * 10) / 10).toString();
+const signed = (x: number) => `${x >= 0 ? '+' : '−'}${n1(Math.abs(x))}`;
+/** A seeded d20 (1–20). */
+function d20(api: WorldPlanner, label: string): number { return Math.min(20, Math.floor(api.random(label) * 20) + 1); }
+
+/**
+ * One uncertain act: skill + attribute bonus − difficulty (− the other side's skill) + d20 (1 → −3 … 20 → +5).
+ * `detail` shows the player what went into the roll. For acts where a hidden witness is possible, the margin is not shown.
+ */
+function check(api: WorldPlanner, p: Profile, skill: string, difficulty: number, label: string, opposed = 0, opposedLabel = 'resistance', showMargin = true)
+  : { outcome: CheckOutcome; margin: number; detail: string } {
+  const die = d20(api, `check:${label}`);
+  const bonus = attrBonus(p, skill);
+  const margin = skillLevel(p, skill) + bonus - difficulty - opposed + ((die - 1) / 19) * 8 - 3;
+  const attr = SKILL_ATTR[skill as Skill];
+  const detail = ` [${skill} ${skillLevel(p, skill)}${attr && bonus ? ` ${attr} ${signed(bonus)}` : ''} − difficulty ${n1(difficulty)}${opposed ? ` − ${opposedLabel} ${n1(opposed)}` : ''} · d20 ${die}${showMargin ? ` → ${signed(margin)}` : ''}]`;
+  return { outcome: margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure', margin, detail };
 }
+
+/** Maximum health comes from the body: 70 + strength × 10, +5 per level after the first. */
+export const maxHealthFor = (p: Pick<Profile, 'attributes' | 'level'>) => 70 + (p.attributes.strength ?? 2) * 10 + (p.level - 1) * 5;
 
 /** Experience: rolled from what was done (base ±25%); levels give points to spend on the sheet and a little more health. */
 function gainXp(api: WorldPlanner, p: Profile, base: number, label: string): string {
@@ -69,7 +85,7 @@ function gainXp(api: WorldPlanner, p: Profile, base: number, label: string): str
   const amount = Math.max(1, Math.round(base * (0.75 + api.random(`xp:${label}`) * 0.5)));
   p.xp += amount;
   let ups = 0;
-  while (p.xp >= xpForNext(p.level)) { p.xp -= xpForNext(p.level); p.level++; p.points++; p.maxHealth += 5; p.health += 5; ups++; }
+  while (p.xp >= xpForNext(p.level)) { p.xp -= xpForNext(p.level); p.level++; p.points++; p.maxHealth = maxHealthFor(p); p.health += 5; ups++; }
   return ` · ✨ +${amount} XP${ups ? ` · ⬆ LEVEL ${p.level}! +${ups} point${ups > 1 ? 's' : ''} to spend (/sheet, /spend <skill or attribute>)` : ''}`;
 }
 
@@ -94,11 +110,17 @@ function resolveFight(api: WorldPlanner, f: {
   const weapon = f.weaponName ? st(api).findItem(me, f.weaponName) : f.aggressor === 'npc' ? st(api).best(me, 'weapon') : undefined;
   if (f.weaponName && !weapon) return { error: `You don't have "${f.weaponName}".` };
   const armor = st(api).best(me, 'armor');
-  const mine = skillLevel(player, 'combat') + attrBonus(player, 'combat') + (weapon?.kind === 'weapon' ? 1 + weapon.quality : 0) + (armor ? 0.5 + armor.quality * 0.5 : 0)
-    - (player.health < 25 ? 2 : player.health < 50 ? 1 : 0) - (f.aggressor === 'npc' ? 0.5 : 0); // caught first
+  const parts: [string, number][] = [
+    ['combat', skillLevel(player, 'combat')], ['strength', attrBonus(player, 'combat')],
+    [weapon?.kind === 'weapon' ? weapon.name : 'bare hands', weapon?.kind === 'weapon' ? 1 + weapon.quality : 0],
+    [armor?.name ?? 'no armour', armor ? 0.5 + armor.quality * 0.5 : 0],
+    ['wounds', -(player.health < 25 ? 2 : player.health < 50 ? 1 : 0)], ['caught first', f.aggressor === 'npc' ? -0.5 : 0],
+  ];
+  const mine = parts.reduce((n, [, v]) => n + v, 0);
   const theirs = foe ? skillLevel(foe, 'combat') + attrBonus(foe, 'combat') + 1.5 - (foe.health < 40 ? 1 : 0) : f.threat * 1.3;
-  const roll = api.random(`fight:${f.opponent}`) * 10 - 5;
-  const margin = mine - theirs + roll;
+  const die = d20(api, `fight:${f.opponent}`);
+  const margin = mine - theirs + ((die - 1) / 19) * 10 - 5; // d20: 1 → −5 … 20 → +5
+  const rollDetail = ` [you ${n1(mine)} (${parts.filter(([k, v]) => v !== 0 || k === 'combat').map(([k, v]) => `${k} ${k === 'combat' ? v : signed(v)}`).join(', ')}) vs ${named?.name ?? f.opponent} ${n1(theirs)} · d20 ${die} → ${signed(margin)}]`;
   const outcome: (typeof OUTCOMES)[number] = margin >= 4 ? 'decisive' : margin >= 1 ? 'win_hurt' : margin >= -1.5 ? 'stalemate' : margin >= -5 ? 'lose' : 'crushing';
   const dmg = (lo: number, hi: number, k: string) => Math.round(lo + api.random(`fight:${f.opponent}:${k}`) * (hi - lo));
   const lethal = f.foeIntent === 'kill';
@@ -136,8 +158,8 @@ function resolveFight(api: WorldPlanner, f: {
   if (foe) st(api).touch(foe, api.ctx.now);
   const head = f.aggressor === 'npc' ? `⚔ ${who} attack${/\b(guards|men|crew|they)\b|s$/i.test(who) ? '' : 's'} you${lethal ? ' to kill' : ''}` : `⚔ Fight — ${who}`;
   const line = playerDied
-    ? `${head}: ${who} kills you. You took ${wound}. ☠ ${api.ctx.player.name} is dead.`
-    : `${head}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${fame}${xp}`;
+    ? `${head}: ${who} kills you. You took ${wound}. ☠ ${api.ctx.player.name} is dead.${rollDetail}`
+    : `${head}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${fame}${xp}${rollDetail}`;
   api.results.push(line);
   api.witnessed.push(`${f.aggressor === 'npc' ? `${who} attacked ${api.ctx.player.name} (${f.foeIntent})` : `${api.ctx.player.name} fought ${who} (${f.playerIntent}${weapon ? `, with ${weapon.name}` : ', bare-handed'})`}: ${label}; ${foeLine}${wound ? `; ${api.ctx.player.name} took ${wound}` : ''}.`);
   const observers = [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])];
@@ -208,7 +230,7 @@ const actions: PackAction[] = [
       const me = api.ctx.player.id;
       const p = profile(api, me);
       const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
-      const { outcome } = check(api, p, String(a.skill), diff, `attempt:${a.feat}`);
+      const { outcome, detail } = check(api, p, String(a.skill), diff, `attempt:${a.feat}`, 0, '', a.risk !== 'caught');
       let cost = '';
       if (outcome !== 'success' && a.risk === 'injury') {
         const amount = outcome === 'failure' ? 15 + Math.round(api.random(`attempt:${a.feat}:d`) * 15) : 5 + Math.round(api.random(`attempt:${a.feat}:d`) * 8);
@@ -226,7 +248,7 @@ const actions: PackAction[] = [
       st(api).touch(p, api.ctx.now);
       const shown = outcome === 'partial' && a.risk === 'caught' ? 'success' : outcome; // a hidden witness is not shown
       const label = { success: 'success', partial: 'partly — it works, but not cleanly', failure: 'failure' }[shown];
-      api.results.push(`🎲 ${a.feat} (${a.skill}, difficulty ${diff}): ${label}.${cost}${xp}`);
+      api.results.push(`🎲 ${a.feat}: ${label}.${cost}${xp}${detail}`);
       api.witnessed.push(`${api.ctx.player.name} tried to ${a.feat}: ${label}.`);
       api.event('feat', `${api.ctx.player.name} tried to ${a.feat}: ${outcome}.`, [me, ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 2);
       return null;
@@ -247,12 +269,12 @@ const actions: PackAction[] = [
       if (named?.status === 'dead') return api.reject(a, `${named.name} is dead — that is looting, not theft.`), null;
       const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
       const watcher = named ? skillLevel(profile(api, named.id), 'perception') * 0.5 : 0;
-      const { outcome } = check(api, p, 'stealth', diff, `steal:${a.what}`, watcher);
+      const { outcome, detail } = check(api, p, 'stealth', diff, `steal:${a.what}`, watcher, `${named?.name ?? 'their'} perception`, false);
       const who = named?.name ?? String(a.from);
       const xp = gainXp(api, p, diff * { success: 10, partial: 6, failure: 2 }[outcome], `steal:${a.what}`);
       st(api).touch(p, api.ctx.now);
       if (outcome === 'failure') {
-        api.results.push(`✋ Caught trying to steal ${a.what} from ${who}.${xp}`);
+        api.results.push(`✋ Caught trying to steal ${a.what} from ${who}.${xp}${detail}`);
         api.witnessed.push(`${api.ctx.player.name} tried to steal ${a.what} from ${who} and was caught in the act.`);
         api.event('crime', `${api.ctx.player.name} was caught trying to steal ${a.what} from ${who}.`, [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 4);
         if (!named || !api.inConversation(named.id)) api.consequence(`${api.ctx.player.name} was caught stealing ${a.what} from ${who} at ${api.ctx.location}.`, 5 + api.random(`steal:${a.what}:c`) * 30);
@@ -266,7 +288,7 @@ const actions: PackAction[] = [
           quality: clamp(Math.round(Number(a.quality)), 0, 3), quantity: 1, createdAt: api.ctx.now });
       }
       // Success is clean. A partial success looks the same to the player — but someone saw.
-      api.results.push(`🤏 You take ${a.what} from ${who} and slip away${a.kind === 'money' && cents ? ` (+${api.money(cents)})` : ''}.${xp}`);
+      api.results.push(`🤏 You take ${a.what} from ${who} and slip away${a.kind === 'money' && cents ? ` (+${api.money(cents)})` : ''}.${xp}${detail}`);
       api.event('crime', `${api.ctx.player.name} stole ${a.what} from ${who}${outcome === 'partial' ? ' — and was seen' : ''}.`, [me], [{ characterId: me, role: 'actor' }], 3);
       if (outcome === 'partial') {
         api.consequence(`${named ? named.name : 'Someone'} ${named ? 'noticed' : 'saw'} ${api.ctx.player.name} steal ${a.what} from ${who} at ${api.ctx.location}. ${api.ctx.player.name} thinks they got away clean.`, 60 + api.random(`steal:${a.what}:c`) * 36 * 60);
@@ -277,7 +299,7 @@ const actions: PackAction[] = [
   {
     name: 'deceive',
     schema: z.strictObject({ action: z.literal('deceive'), target: z.string().min(2).max(80), claim: z.string().min(3).max(300), difficulty: z.number() }),
-    doc: 'deceive: the player tries to make someone present believe something false — a lie, a bluff, a false promise, a disguise, a forged token. Use it whenever the player\'s words are meant to mislead (even if the player doesn\'t say "I lie"). target = exact name; claim = what they are meant to believe; difficulty 1 (plausible) … 5 (absurd, or they have reason to know better). The game rolls it against the target\'s perception.',
+    doc: 'deceive: the player tries to make someone present believe something false — a lie, a bluff, a false promise, a disguise, a forged token. Use it whenever the player\'s words are meant to mislead: when they mark it ("(bluff)", "I lie:", "minto:", "blefo:" or similar in any language — the marker is not spoken aloud), or when what they claim contradicts what their character knows or could plausibly know (even if they don\'t say "I lie"). target = exact name; claim = what they are meant to believe; difficulty 1 (plausible) … 5 (absurd, or they have reason to know better). The game rolls it against the target\'s perception.',
     handle: (api, a) => {
       const me = api.ctx.player.id;
       const target = api.findCharacter(String(a.target));
@@ -286,11 +308,11 @@ const actions: PackAction[] = [
       const p = profile(api, me);
       const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
       const them = profile(api, target.id);
-      const { outcome } = check(api, p, 'deception', diff * 0.8, `deceive:${a.claim}`, skillLevel(them, 'perception') + attrBonus(them, 'perception'));
+      const { outcome, detail } = check(api, p, 'deception', diff * 0.8, `deceive:${a.claim}`, skillLevel(them, 'perception') + attrBonus(them, 'perception'), `${target.name}'s perception`);
       const xp = gainXp(api, p, diff * { success: 8, partial: 4, failure: 2 }[outcome], `deceive:${a.claim}`);
       st(api).touch(p, api.ctx.now);
       const verdict = { success: `${target.name} believes you`, partial: `${target.name} has doubts but goes along — for now`, failure: `${target.name} sees through it` }[outcome];
-      api.results.push(`🎭 Deception — "${a.claim}": ${verdict}.${xp}`);
+      api.results.push(`🎭 Deception — "${a.claim}": ${verdict}.${xp}${detail}`);
       api.witnessed.push(outcome === 'success' ? `${api.ctx.player.name} told you: "${a.claim}". You BELIEVE it.`
         : outcome === 'partial' ? `${api.ctx.player.name} told you: "${a.claim}". You are not sure it is true, but you go along with it for now.`
         : `${api.ctx.player.name} told you: "${a.claim}". You can tell it is a lie.`);
@@ -325,13 +347,13 @@ const actions: PackAction[] = [
       if (a.approach === 'intimidate') bonus += attrBonus(p, 'combat') + Math.min(1.5, p.fame / 6);
       const diff = clamp(Math.round(Number(a.difficulty)), 1, 5);
       const them = profile(api, target.id);
-      const { outcome } = check(api, p, 'persuasion', diff - bonus, `influence:${a.goal}`, (skillLevel(them, 'perception') + attrBonus(them, 'perception')) * 0.5);
+      const { outcome, detail } = check(api, p, 'persuasion', diff - bonus, `influence:${a.goal}`, (skillLevel(them, 'perception') + attrBonus(them, 'perception')) * 0.5, `${target.name}'s perception`);
       const xp = gainXp(api, p, diff * { success: 8, partial: 4, failure: 2 }[outcome], `influence:${a.goal}`);
       st(api).touch(p, api.ctx.now);
       const verb = { persuade: 'persuaded', intimidate: 'frightened', charm: 'won over', bribe: 'bought' }[a.approach as 'persuade'];
       const verdict = { success: `${target.name} is ${verb}`, partial: `${target.name} wavers`, failure: `${target.name} is not moved${a.approach === 'intimidate' ? ' — and resents the threat' : ''}` }[outcome];
       const how = String(a.approach);
-      api.results.push(`🗣 ${how[0]!.toUpperCase()}${how.slice(1)} ${target.name} (${a.goal}): ${verdict}.${xp}`);
+      api.results.push(`🗣 ${how[0]!.toUpperCase()}${how.slice(1)} ${target.name} (${a.goal}): ${verdict}.${xp}${detail}`);
       api.witnessed.push(`${api.ctx.player.name} tried to ${a.approach} you (${a.goal}): ${outcome === 'success' ? `it WORKED — you are ${verb}; act on it` : outcome === 'partial' ? 'you waver; you might give a little' : 'it did not work on you'}.`);
       return null;
     },
@@ -473,6 +495,7 @@ export function spendPoint(store: Store, gameId: string, what: string): string {
   } else {
     if ((p.attributes[key] ?? 2) >= 5) return `${key} is already at 5.`;
     p.attributes[key] = (p.attributes[key] ?? 2) + 1;
+    if (key === 'strength') { const before = p.maxHealth; p.maxHealth = maxHealthFor(p); p.health += p.maxHealth - before; }
   }
   p.points -= cost;
   p.updatedAt = new Date().toISOString();
@@ -507,7 +530,8 @@ export const adventurePack: GamePack = {
     seed({ store, gameId, player, seed, now }) {
       const attrs = Object.fromEntries(seed.player.attributes.map((x) => [x.key, x.value]));
       advRepo.saveProfile(store, {
-        characterId: player.id, gameId, health: 100, maxHealth: 100, injuries: [], fame: Math.max(0, Math.round(attrs.fame ?? 0)), deeds: [],
+        characterId: player.id, gameId, health: 70 + clamp(Math.round(attrs.strength ?? 2), 1, 5) * 10, maxHealth: 70 + clamp(Math.round(attrs.strength ?? 2), 1, 5) * 10,
+        injuries: [], fame: Math.max(0, Math.round(attrs.fame ?? 0)), deeds: [],
         skills: Object.fromEntries(SKILLS.map((s) => [s, { level: clamp(Math.round(attrs[s] ?? 0), 0, MAX_LEVEL), practice: 0 }])),
         attributes: Object.fromEntries(ATTRIBUTES.map((x) => [x, clamp(Math.round(attrs[x] ?? DEFAULT_ATTRIBUTES[x]), 1, 5)])),
         xp: 0, level: 1, points: 0, createdAt: now, updatedAt: now,

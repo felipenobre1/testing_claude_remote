@@ -35,7 +35,7 @@ Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
 While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
 In game: type what you do. Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit
-  Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)`;
+  Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)  /rolls (dice details on/off)`;
 
 function parseArgs(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
@@ -170,6 +170,7 @@ async function design(reader: Reader, creation: WorldCreation, draftId: string, 
 async function play(reader: Reader, engine: Engine, gameId: string, debug: boolean, intro: string) {
   const store = engine.store;
   let hints = true;
+  let rolls = true; // show what went into each roll: [skill, attribute, difficulty, d20 …]
   const lang = langOf(store, gameId);
   const t = UI[lang];
   console.log(`\n${intro}\n\n${UI[langOf(store, gameId)].gameFooter(gameId)}\n\n${formatStatusLine(store, gameId)}\n`);
@@ -182,6 +183,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
       if (line === '/hints') { hints = !hints; console.log(hints ? t.hintsOn : t.hintsOff); continue; }
+      if (line === '/rolls') { rolls = !rolls; console.log(`dice details ${rolls ? 'on' : 'off'}`); continue; }
       const cmd = line.match(/^\/(\w+)\s*(.*)$/);
       if (cmd && engine.pack.commands?.[cmd[1]!]) { console.log(`\n${engine.pack.commands[cmd[1]!]!.run(store, gameId, cmd[2]!.split(/\s+/).filter(Boolean), lang)}\n`); continue; }
       if (line === '/status') { console.log(formatStatus(store, gameId)); continue; }
@@ -192,7 +194,8 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       }
       const r = await working(t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
       const ideas = hints && r.suggestions?.length ? `\n\n💡 ${t.ideas}: ${r.suggestions.join(' · ')}` : '';
-      console.log(`\n${r.status === 'failed' ? t.failed : r.text}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
+      const body = r.status === 'failed' ? t.failed : rolls ? r.text : r.text.replace(/ \[[^\]\n]*\]/g, '');
+      console.log(`\n${body}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
       if (r.gameOver) { console.log('☠  THE END.  (npm start -- export keeps the log of this story)\n'); break; }

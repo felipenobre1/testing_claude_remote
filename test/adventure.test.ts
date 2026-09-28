@@ -91,7 +91,7 @@ test('feats, rest, training and gear', async () => {
   const s = start({ roll: 0.5 });
   const climb = await s.turn('I climb the cistern wall', { intents: ['general_action'], minutesElapsed: 10, narration: '',
     actions: [{ action: 'attempt', feat: 'climb the cistern wall at night', skill: 'athletics', difficulty: 4, risk: 'injury' }] });
-  assert.match(climb.text, /🎲 climb the cistern wall at night \(athletics, difficulty 4\): partly — it works, but not cleanly\. You took a cut to the/);
+  assert.match(climb.text, /🎲 climb the cistern wall at night: partly — it works, but not cleanly\. You took a cut to the face \(−9; 91\/100\)\. · ✨ \+16 XP \[athletics 2 agility \+0\.5 − difficulty 4 · d20 11 → −0\.3\]/);
   const train = await s.turn('I train with Oda all day', { intents: ['general_action'], minutesElapsed: 600, narration: '',
     actions: [{ action: 'train', skill: 'combat', hours: 14, teacherName: 'Oda Venn' }] });
   assert.match(train.text, /🏋 Trained combat with Oda Venn: ⬆ combat is now 3/);
@@ -249,12 +249,17 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   const prose = 'O bandido avança; a faca do seu pai encontra o braço dele, e ele foge pelo beco.';
   llm.enqueue('interpret', fightTurn)
     .enqueue('narrate',
-      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100). · ✨ +38 XP'] }, // wrong number
-      { prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'],
-        lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100). · ✨ +38 XP'] });
+      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100).'] }, // wrong numbers
+      (req: { user: string }) => {
+        // A faithful rendering: words translated, every number kept.
+        const en = req.user.match(/\n1\. (⚔ Fight[^\n]*)/)![1]!;
+        return { prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'],
+          lines: [en.replace('Fight', 'Luta').replace('decisive victory', 'vitória decisiva').replace('You took', 'Você levou')] };
+      });
   const r = await engine.takeTurn({ gameId: game.id, input: 'enfrento o bandido' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.equal(r.text, `${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100). · ✨ +38 XP`);
+  assert.ok(r.text.startsWith(`${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. `), r.text);
+  assert.match(r.text, /Você levou a cut to the leg \(−6; 94\/100\)\. · ✨ \+38 XP \[you 5 \(combat 2, strength \+0\.5, curved knife \+2, padded desert coat \+0\.5\) vs um bandido de beco 2\.6 · d20 20 → \+7\.4\]$/);
   assert.deepEqual(r.suggestions, ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve']); // the narrator's, not the interpreter's
   assert.match(r.results[0]!, /^⚔ Fight — um bandido de beco: decisive victory/); // the record stays English
   const calls = llm.callsFor('narrate');
@@ -451,7 +456,7 @@ test('deception and influence are rolled; the person acts on what the game decid
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I lie to the collector' });
   assert.match(r.text, /🎭 Deception — "House Varr already forgave my debt": Sarai Tul believes you\./);
   assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED[^\n]*\nRhen told you: "House Varr already forgave my debt"\. You BELIEVE it\./);
-  assert.match(s.llm.callsFor('interpret')[0]!.system, /deceive: the player tries to make someone present believe something false[^\n]*even if the player doesn't say "I lie"/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /deceive: the player tries to make someone present believe something false[^\n]*when they mark it \("\(bluff\)", "I lie:", "minto:", "blefo:"[^\n]*even if they don't say "I lie"/);
 
   const t = start({ roll: 0 });
   t.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Sarai Tul', relationHint: null }, channel: 'in_person', spokenText: 'Take this and forget my name.',
@@ -467,17 +472,17 @@ test('deception and influence are rolled; the person acts on what the game decid
 test('deeds people saw come back secretly; nobody saw, nothing happens', async () => {
   const s = start();
   s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'I slept with your wife.',
-    deeds: [{ what: 'told Kesh Adar he had slept with his wife and called him a coward', against: 'Kesh Adar', severity: 5, tone: 'harm', public: true }] }))
+    deeds: [{ what: 'told Kesh Adar he had slept with his wife and called him a coward', against: 'Kesh Adar', severity: 5, tone: 'harm', exposure: 'public' }] }))
     .enqueue('npc_turn', npc({ dialogue: 'You will regret that.' }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
   assert.doesNotMatch(r.text, /consequence|revenge/i); // the player is not told
   const c = s.store.listScheduled(s.game.id, 'pending').find((i) => i.kind === 'consequence')!;
-  assert.match(String(c.payload.summary), /Rhen told Kesh Adar he had slept with his wife and called him a coward \(to Kesh Adar\) at .* — seen by Kesh Adar, bystanders\. Someone who saw it, or was wronged, acts on it/);
+  assert.match(String(c.payload.summary), /Rhen told Kesh Adar he had slept with his wife and called him a coward \(to Kesh Adar\) at .* — seen by Kesh Adar(, someone Rhen did not notice)?\. Someone who saw it, or was wronged, acts on it/);
   assert.match(s.llm.callsFor('interpret')[0]!.system, /deeds: socially significant things Rhen does or says THIS turn/);
 
   const q = start();
   await q.turn('I mutter an insult about the house', { intents: ['general_action'], minutesElapsed: 1, narration: '',
-    deeds: [{ what: 'cursed House Varr under his breath', against: null, severity: 1, tone: 'harm', public: false }] });
+    deeds: [{ what: 'cursed House Varr under his breath', against: null, severity: 1, tone: 'harm', exposure: 'private' }] });
   assert.ok(!q.store.listScheduled(q.game.id, 'pending').some((i) => i.kind === 'consequence'));
   s.store.close();
   q.store.close();
@@ -500,5 +505,32 @@ test('the character sheet, XP rolls, levelling up and spending points', async ()
   assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['strength'], 'en'), 'You have 1 point; strength costs 3.');
   assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['furtividade'], 'pt'), '✓ stealth → 2 · 0 points left');
   assert.match(adventurePack.commands!.sheet!.run(s.store, s.game.id, [], 'pt'), /^══ RHEN — Nível 2[\s\S]*ATRIBUTOS  força ●●●○○[\s\S]*furtividade +●●○○○/);
+  s.store.close();
+});
+
+test('unseen ears: nobody in the scene, but someone may have overheard — likelier the more exposed the place', async () => {
+  const deed = (exposure: 'private' | 'semi_public' | 'public') => ({ what: 'boasted of robbing a House Varr courier', against: null, severity: 5, tone: 'harm' as const, exposure });
+  const heard = start({ roll: 0 }); // the overheard roll comes in under even the private chance
+  await heard.turn('I boast to myself', { intents: ['general_action'], minutesElapsed: 1, narration: '', deeds: [deed('private')] });
+  const c = heard.store.listScheduled(heard.game.id, 'pending').find((i) => i.kind === 'consequence')!;
+  assert.match(String(c.payload.summary), /— seen by someone Rhen did not notice\./);
+  heard.store.close();
+  const alone = start({ roll: 0.5 }); // 0.5 ≥ 0.05 (private) — nobody heard
+  await alone.turn('I boast to myself', { intents: ['general_action'], minutesElapsed: 1, narration: '', deeds: [deed('private')] });
+  assert.ok(!alone.store.listScheduled(alone.game.id, 'pending').some((i) => i.kind === 'consequence'));
+  alone.store.close();
+  const crowd = start({ roll: 0.5 }); // 0.5 < 0.6 (public) — in a crowd, someone heard
+  await crowd.turn('I boast in the market', { intents: ['general_action'], minutesElapsed: 1, narration: '', deeds: [deed('public')] });
+  assert.ok(crowd.store.listScheduled(crowd.game.id, 'pending').some((i) => i.kind === 'consequence'));
+  crowd.store.close();
+});
+
+test('health comes from the body: 70 + strength × 10, +5 per level; more strength, more health', () => {
+  const s = start();
+  assert.equal(s.me().maxHealth, 100); // Rhen, strength 3
+  const p = s.me();
+  advRepo.saveProfile(s.store, { ...p, points: 3 });
+  assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['strength'], 'en'), '✓ strength → 4 · 0 points left');
+  assert.deepEqual([s.me().maxHealth, s.me().health], [110, 110]);
   s.store.close();
 });

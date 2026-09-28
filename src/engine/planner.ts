@@ -222,15 +222,17 @@ export class WorldPlanner {
    * A deed people saw. Whether and when they act on it is decided now, secretly (the player finds out when it happens):
    * the worse (or better) it was, the likelier and sooner.
    */
-  deed(d: { what: string; against: string | null; severity: number; tone: 'harm' | 'kindness'; public: boolean }, witnesses: string[]) {
-    if (!witnesses.length && !d.public) return; // nobody saw it
+  deed(d: { what: string; against: string | null; severity: number; tone: 'harm' | 'kindness'; exposure: 'private' | 'semi_public' | 'public' }, witnesses: string[]) {
+    const key = `deed:${d.what}`;
+    // Unseen ears: nobody the player noticed may still have heard — likelier the more exposed the place.
+    const overheard = this.random(`${key}:overheard`) < { private: 0.05, semi_public: 0.25, public: 0.6 }[d.exposure];
+    if (!witnesses.length && !overheard) return; // nobody saw it
     const sev = Math.max(1, Math.min(5, Math.round(d.severity)));
     const chance = [0, 0.1, 0.35, 0.65, 0.9, 1][sev]!;
-    const key = `deed:${d.what}`;
     if (this.random(`${key}:happens`) >= chance) return;
     const window: [number, number] = ([[0, 0], [72, 240], [48, 168], [24, 72], [6, 24], [1, 6]] as [number, number][])[sev]!;
     const hours = window[0] + this.random(`${key}:when`) * (window[1] - window[0]);
-    const seen = [...witnesses, ...(d.public ? ['bystanders'] : [])].join(', ');
+    const seen = [...witnesses, ...(overheard ? [`someone ${this.ctx.player.name} did not notice`] : [])].join(', ');
     this.consequence(`${this.ctx.player.name} ${d.what}${d.against ? ` (to ${d.against})` : ''} at ${this.ctx.location} — seen by ${seen}. `
       + (d.tone === 'harm' ? 'Someone who saw it, or was wronged, acts on it: reports it, spreads it, or takes revenge.' : 'Someone who saw it repays it, or speaks well of them.'), hours * 60);
   }

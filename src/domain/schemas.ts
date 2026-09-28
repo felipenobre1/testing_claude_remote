@@ -52,7 +52,7 @@ const interpretFields = {
   /** Socially significant things the player did this turn that people may remember and act on later. */
   deeds: z.array(z.object({
     what: z.string().min(3).max(200), against: z.string().max(80).nullable(), severity: z.number().int().min(1).max(5),
-    tone: z.enum(['harm', 'kindness']), public: z.boolean(),
+    tone: z.enum(['harm', 'kindness']), exposure: z.enum(['private', 'semi_public', 'public']),
   })).max(3),
 };
 
