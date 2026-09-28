@@ -270,3 +270,37 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   assert.match(llm.callsFor('interpret')[0]!.system, /seek: ONLY for a person or organisation Rhen does not yet know how to reach/);
   store.close();
 });
+
+test('an offer made in a scene beat is real: the player accepts it (not a new offer of their own); the narrator continues from its previous passage', async () => {
+  const s = start({ beats: true, narrator: true });
+  const quiet = () => interp({ intents: ['general_action'], minutesElapsed: 20, narration: 'You wait by the wall.' });
+  s.llm.enqueue('interpret', quiet(), quiet())
+    .enqueue('narrate', { prose: 'The yard is grey and cold; dust hangs in the first light.', suggestions: [], lines: [] })
+    .enqueue('scene_beat', { kind: 'arrival', title: 'Kesh wants a sparring partner', perceived: 'Kesh Adar walks in with a training sword and sets fifteen drams on the low wall.',
+      involves: ['Kesh Adar'], newPerson: null, opensConversation: { name: 'Kesh Adar', channel: 'in_person', openingLine: 'Three minutes with me. You get the money if you can still stand.' },
+      choice: 'Take the fifteen drams and the beating, or walk away.',
+      offer: { kind: 'deal', label: 'three minutes of sparring', terms: [{ key: 'price_offerer_pays', value: 15 }], description: 'Kesh pays 15 drams for three minutes of sparring' } })
+    .enqueue('narrate', { prose: 'Kesh comes through the gate with a training sword. "Three minutes with me. You get the money if you can still stand."', suggestions: ['Accept the bout'], lines: [] });
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I wait' });
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I keep waiting' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(r.text, /→ Kesh Adar offers you: three minutes of sparring for dr 15\.00/);
+  const offer = s.store.listOffers(s.game.id).find((o) => o.fromCharacterId === s.char('Kesh Adar').id)!;
+  assert.equal(offer.status, 'pending');
+  // The narrator was given its previous passage (continuity, no re-description).
+  assert.match(s.llm.callsFor('narrate').at(-1)!.user, /^PREVIOUS PASSAGE \(already read — continue from it, do not repeat it\):\nThe yard is grey and cold/);
+
+  // "I accept" → respond_to_offer on HIS offer; the briefing makes that explicit.
+  s.llm.enqueue('interpret', (req: { user: string }) => {
+    assert.match(req.user, new RegExp(`\\[${offer.id}\\] Offer from Kesh Adar to you: three minutes of sparring for dr 15\\.00 .*respond_to_offer with this id, not a new offer`));
+    return interp({ intents: ['speak'], target: { name: 'Kesh Adar', relationHint: null }, spokenText: 'Fechado.', actions: [{ action: 'respond_to_offer', offerId: offer.id, accept: true }] });
+  })
+    .enqueue('npc_turn', npc({ dialogue: 'Then pick up a sword.' }))
+    .enqueue('narrate', { prose: 'Kesh tosses you a training sword. "Then pick up a sword."', suggestions: [], lines: [] });
+  const acc = await s.engine.takeTurn({ gameId: s.game.id, input: 'Aceito' });
+  assert.equal(acc.status, 'committed', acc.error ?? '');
+  assert.match(acc.text, /✓ Deal: three minutes of sparring/);
+  assert.equal(s.store.getAccountOf(s.game.id, 'character', s.player.id)!.balanceCents, 4_500); // 30 + 15 from Kesh
+  assert.match(s.llm.callsFor('narrate').at(-1)!.user, /THE PLAYER SAID \(do not repeat it back\): "Fechado\."/);
+  s.store.close();
+});

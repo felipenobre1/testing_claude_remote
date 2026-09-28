@@ -151,6 +151,23 @@ export class WorldPlanner {
         amountCents: cents, description, category, gameTime, createdAt: this.ctx.now },
     });
   }
+  /**
+   * Money between two characters. Someone other than the player whose purse is not simulated (no account, or
+   * not enough in it) pays from their own untracked means. The player can never spend money they don't have:
+   * returns false (and reports it) if the player cannot afford it.
+   */
+  payBetween(fromId: string, toId: string, cents: number, description: string, category: string): boolean {
+    if (cents <= 0) return true;
+    const me = this.ctx.player.id;
+    const from = fromId === me ? this.ensureAccount('character', me) : this.account('character', fromId);
+    if (fromId === me && from!.balanceCents < cents) {
+      this.results.push(`✗ You can't pay ${this.money(cents)} for ${description}: you have ${this.money(from!.balanceCents)}.`);
+      return false;
+    }
+    const payer = from && from.balanceCents >= cents ? from : null;
+    this.move(payer, this.ensureAccount('character', toId), cents, description, category);
+    return true;
+  }
   event(type: GameEvent['type'], summary: string, observerIds: string[], participants: GameEvent['participants'], importance = 2, gameTime = this.ctx.gameTime,
     transcript: GameEvent['transcript'] = [], channel?: GameEvent['observers'][number]['channel']) {
     const ev: GameEvent = {
@@ -375,6 +392,37 @@ export class WorldPlanner {
     this.ops.push({ op: 'create_offer', offer: { ...offer } });
     this.event('offer_made', `${this.ctx.player.name} offered ${to.name}: ${this.describeOffer(offer)}.`, [me, to.id], [{ characterId: me, role: 'actor' }, { characterId: to.id, role: 'addressee' }], 4);
     this.results.push(`→ Offer to ${to.name}: ${this.describeOffer(offer)}`);
+    return null;
+  }
+
+  /**
+   * An offer someone makes TO the player (e.g. in a scene beat). Validated like the player's own offers;
+   * the player answers it with respond_to_offer. Returns a problem, or null.
+   */
+  npcOffer(fromId: string, o: { kind: string; label: string | null; terms: { key: string; value: number }[]; description: string }): string | null {
+    const me = this.ctx.player.id;
+    const def = this.offerKind(o.kind);
+    if (!def) return `unknown offer kind "${o.kind}" (known: ${this.ctx.pack.offerKinds.map((k) => k.kind).join(', ')})`;
+    const terms: Record<string, number> = {};
+    for (const t of o.terms) {
+      if (!def.terms.some((d) => d.key === t.key)) return `"${t.key}" is not a term of ${o.kind} (terms: ${def.terms.map((d) => d.key).join(', ')})`;
+      terms[t.key] = t.value;
+    }
+    const missing = def.terms.filter((d) => d.required && terms[d.key] === undefined).map((d) => d.key);
+    if (missing.length) return `${o.kind} needs ${missing.join(', ')}`;
+    const bad = def.validateTerms?.(terms);
+    if (bad) return bad;
+    const subject = def.resolveSubject(this, null, me);
+    if (!('subjectRef' in subject)) return 'reject' in subject ? subject.reject : subject.modelError;
+    const offer: Offer = {
+      id: newId('offer'), gameId: this.ctx.gameId, kind: o.kind, fromCharacterId: fromId, toCharacterId: me, subjectRef: subject.subjectRef, label: o.label,
+      terms, description: o.description, status: 'pending', parentOfferId: null, attempts: 0, lastOutcome: null, nextDecisionAfter: null,
+      lastAppraisal: null, createdGameTime: this.ctx.gameTime, resolvedGameTime: null, createdAt: this.ctx.now, updatedAt: this.ctx.now,
+    };
+    this.offers.set(offer.id, offer);
+    this.ops.push({ op: 'create_offer', offer: { ...offer } });
+    this.event('offer_made', `${this.name(fromId)} offered ${this.ctx.player.name}: ${this.describeOffer(offer)}.`, [me, fromId], [{ characterId: fromId, role: 'actor' }, { characterId: me, role: 'addressee' }], 4);
+    this.results.push(`→ ${this.name(fromId)} offers you: ${this.describeOffer(offer)}`);
     return null;
   }
 
@@ -623,7 +671,7 @@ export function playerWorldBriefing(p: WorldPlanner, gameTime: string): string {
     lines.push(`Your pending offer to ${p.name(o.toCharacterId)}: ${p.describeOffer(o)}`);
   }
   for (const o of p.allOffers().filter((x) => x.toCharacterId === me && x.status === 'pending')) {
-    lines.push(`[${o.id}] Counter-offer from ${p.name(o.fromCharacterId)}: ${p.describeOffer(o)} — "${o.description}" (answer with respond_to_offer)`);
+    lines.push(`[${o.id}] ${o.parentOfferId ? 'Counter-offer' : 'Offer'} from ${p.name(o.fromCharacterId)} to you: ${p.describeOffer(o)} — "${o.description}" (the player accepting or declining THIS = respond_to_offer with this id, not a new offer)`);
   }
   for (const o of p.allObligations().filter((x) => x.status === 'open' && (x.debtorId === me || x.creditorId === me))) lines.push(obligationLine(p, o, gameTime));
   const soon = upcoming(p.ctx.store, p.ctx.gameId, gameTime, 14);

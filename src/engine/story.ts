@@ -34,8 +34,15 @@ export const SceneBeatSchema = z.object({
   }).nullable(),
   /** The decision this puts in front of the player, in one line. */
   choice: z.string().min(5).max(300),
+  /** A concrete proposal the speaker makes to the player (becomes a real offer the player can accept or refuse). */
+  offer: z.object({
+    kind: z.string().max(40), label: z.string().max(80).nullable(), terms: z.array(z.object({ key: z.string().max(40), value: z.number() })).max(6),
+    description: z.string().min(3).max(300),
+  }).nullable(),
 });
 export type SceneBeat = z.infer<typeof SceneBeatSchema>;
+/** Lenient parsing: a beat without an offer field has no offer. */
+export const SceneBeatParseSchema = SceneBeatSchema.extend({ offer: SceneBeatSchema.shape.offer.default(null) });
 
 const THRESHOLD: Record<WorldSeed['style']['pace'], number> = { quiet: Infinity, steady: 4, eventful: 2 };
 
@@ -56,7 +63,7 @@ export function beatDue(store: Store, gameId: string, pace: WorldSeed['style']['
   return quietTurns >= THRESHOLD[pace];
 }
 
-export function beatSystemPrompt(bible: string, world: WorldContext): string {
+export function beatSystemPrompt(bible: string, world: WorldContext, offerKinds = ''): string {
   return `You are the storyteller of a living world. Something is about to happen TO the player — now, in this scene.
 THE WORLD BIBLE (binding):
 ${bible}
@@ -68,6 +75,8 @@ Propose ONE thing that happens now and puts a real decision in front of the play
 - involves: exact names of existing living characters involved (never the player). newPerson: a new ordinary person if the moment needs one (full profile; never a real public figure); otherwise null.
 - opensConversation: if someone addresses the player directly, their name (existing or the newPerson), the channel, and their first words. null otherwise.
 - choice: the decision this forces, in one line (e.g. "Take the offered blade and the debt that comes with it, or walk away").
+- offer: when the speaker proposes a concrete deal to the player (pay for a job, a sparring bout for coins, a blade on credit), state it so the player can accept or refuse it: kind and terms from these offer kinds, a short label and description; otherwise null.
+${offerKinds}
 - Respect the bible: pace, tone, realism, player significance. ${contentRule(world.violence, 'narrator')}${languageRule(world.language, 'title, perceived, choice and opensConversation.openingLine')}
 Return JSON only.`;
 }
@@ -115,6 +124,7 @@ export function beatProblems(b: SceneBeat, ctx: { characters: Character[]; playe
     const ok = (b.newPerson && b.newPerson.name.toLowerCase() === n) || b.involves.some((x) => x.toLowerCase() === n);
     if (!ok) problems.push('opensConversation: the speaker must be in involves or be the newPerson');
   }
+  if (b.offer && !b.opensConversation) problems.push('offer: someone must be speaking to the player to make an offer (opensConversation)');
   return problems;
 }
 
@@ -141,11 +151,13 @@ ${bible}
 
 Write this turn as a passage of a novel:
 - Put the reader inside the scene: the place (light, sounds, smells, temperature, objects), their body (breath, pain, fatigue, hunger), what they feel — concrete, specific, never generic. Vary rhythm; no purple prose, no clichés.
+- CONTINUITY: the PREVIOUS PASSAGE is what the reader has just read. Continue from it like the next paragraph of the same book. Do not describe the place, the light, the smells, the weather or the reader's gear again unless something changed (a new place, time passing, a new sense detail that matters). Never reuse its images or phrases.
+- The reader just wrote their own words and actions: do NOT repeat them back. Show their effect instead (a reaction, a silence, the other person's face); at most echo a few words when it matters.
 - Everything in THE FACTS OF THIS TURN is decided and true. Narrate it faithfully: never change, soften or add outcomes (who wins, who dies, what is found, what is paid), never invent numbers. You may show HOW it happened.
 - Quote every line of dialogue listed under WORDS SPOKEN exactly as written (you may add who says it, how, gestures around it). Do not invent other dialogue for anyone.
 - Never decide what ${playerName} does, says or feels about a choice next.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
-- Length: 2–6 paragraphs; shorter for small moments.
+- Length follows the moment: an exchange of words = one short paragraph around the dialogue; an action with consequences = 1–3 paragraphs; a new place or a big event = up to 5.
 - ${contentRule(world.violence, 'narrator')}
 
 Also return:
@@ -169,18 +181,20 @@ export interface NarratorInput {
   choice: string | null;
   resultLines?: string[]; // the game's result lines, to be rendered in the player's language
   previousIdeas?: string[];
+  previousPassage?: string; // what the reader read last turn (for continuity; never repeated)
 }
 
 export const localized = (language: string) => Boolean(language) && !/^english$/i.test(language.trim());
 
 export function narratorUserPrompt(n: NarratorInput): string {
   return [
+    ...(n.previousPassage ? ['PREVIOUS PASSAGE (already read — continue from it, do not repeat it):', n.previousPassage, ''] : []),
     `TIME: ${formatGameTime(n.gameTime)}`,
     `PLACE: ${n.location}. ${n.sceneDescription}`,
     ...(n.playerState.length ? ['THE READER\'S CONDITION:', ...n.playerState] : []),
     `WHAT THE PLAYER WROTE: ${n.input}`,
-    ...(n.playerSaid ? [`THE PLAYER SAYS: "${n.playerSaid}"`] : []),
-    ...(n.playerDid ? [`THE PLAYER DOES: ${n.playerDid}`] : []),
+    ...(n.playerSaid ? [`THE PLAYER SAID (do not repeat it back): "${n.playerSaid}"`] : []),
+    ...(n.playerDid ? [`THE PLAYER DID: ${n.playerDid}`] : []),
     ...(n.draftNarration ? [`SHORT ACCOUNT OF THE PLAYER'S OWN ACTIONS: ${n.draftNarration}`] : []),
     'THE FACTS OF THIS TURN (decided by the game):', ...(n.facts.length ? n.facts.map((f) => `- ${f}`) : ['- (nothing beyond the player\'s own actions)']),
     'WORDS SPOKEN (quote exactly):', ...(n.words.length ? n.words.map((w) => `- ${w.speaker}${w.how ? ` (${w.how})` : ''}: "${w.text}"`) : ['- (none)']),

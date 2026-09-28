@@ -25,7 +25,7 @@ import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
-import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
+import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
@@ -475,13 +475,14 @@ export class Engine {
     if (npcOut && target && npcOut.dialogue.trim()) words.push({ speaker: target.name, text: npcOut.dialogue.trim(), how: npcOut.perceivable.trim() });
     if (beat?.opensConversation) words.push({ speaker: beat.opensConversation.name, text: beat.opensConversation.openingLine.trim(), how: '' });
     let narration: Narration | null = null;
-    const previousIdeas = (store.listTurns(game.id).filter((t) => t.status === 'committed').at(-1)?.response as { suggestions?: string[] } | null)?.suggestions ?? [];
+    const lastResponse = store.listTurns(game.id).filter((t) => t.status === 'committed').at(-1)?.response as { suggestions?: string[]; narration?: string } | null;
+    const previousIdeas = lastResponse?.suggestions ?? [];
     if (this.narratorEnabled && (seed.style.narration ?? 'literary') === 'literary') {
       narration = await this.narrate(trace, world, player, economy, {
         gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
         input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
         facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
-        words, conversationEnded, choice: beat?.choice ?? null, previousIdeas,
+        words, conversationEnded, choice: beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
         resultLines: localized(world.ctx.language) ? results : [],
       });
     }
@@ -703,7 +704,7 @@ export class Engine {
     // A beat is extra: if it can't be made valid (or the call fails), the player's turn goes ahead without it.
     let beat: SceneBeat;
     try {
-      beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx), user, 'scene_beat', SceneBeatSchema, SceneBeatSchema,
+      beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx, this.pack.offerKinds.map((k) => `  - ${k.kind}: ${k.summary}. terms: ${k.terms.map((t) => t.key).join(', ')}`).join('\n')), user, 'scene_beat', SceneBeatSchema, SceneBeatParseSchema as unknown as z.ZodType<SceneBeat>,
         (b) => beatProblems(b, { characters: known, playerId: player.id, conversationOpen }));
     } catch (e) {
       if (!(e instanceof TurnFailure) && !(e instanceof LLMError)) throw e;
@@ -742,6 +743,12 @@ export class Engine {
         transcript: [{ speakerId: speaker, speakerName: name, text: beat.opensConversation.openingLine }], importance: 3, location: plan.scene.location,
         participants: [{ characterId: speaker, role: 'actor' }, { characterId: player.id, role: 'addressee' }],
         observers: [player.id, speaker].map((id) => ({ characterId: id, channel })) });
+    }
+    if (beat.offer && beat.opensConversation) {
+      // The proposal becomes a real offer the player can accept or refuse.
+      if (newcomer && !economy.ctx.characters.some((c) => c.id === newcomer!.id)) economy.ctx.characters.push(newcomer);
+      const problem = economy.npcOffer(idOf(beat.opensConversation.name), beat.offer);
+      if (problem) trace.beatOfferDropped = problem;
     }
     trace.beat = beat;
     return beat;

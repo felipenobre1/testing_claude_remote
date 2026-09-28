@@ -57,11 +57,9 @@ export const openPack: GamePack = {
       return `${o.label ?? o.description}${price}`;
     },
     execute: (api, o) => {
-      const from = api.ensureAccount('character', o.fromCharacterId), to = api.ensureAccount('character', o.toCharacterId);
-      const pays = cents(o.terms.price_offerer_pays ?? 0), gets = cents(o.terms.price_offerer_receives ?? 0);
-      if (pays) api.move(from, to, pays, o.label ?? 'deal', 'deal');
-      if (gets) api.move(to, from, gets, o.label ?? 'deal', 'deal');
-      api.results.push(`✓ Deal agreed: ${o.label ?? o.description}`);
+      const pays = Math.round((o.terms.price_offerer_pays ?? 0) * 100), gets = Math.round((o.terms.price_offerer_receives ?? 0) * 100);
+      const ok = api.payBetween(o.fromCharacterId, o.toCharacterId, pays, o.label ?? 'deal', 'deal') && api.payBetween(o.toCharacterId, o.fromCharacterId, gets, o.label ?? 'deal', 'deal');
+      if (ok) api.results.push(`✓ Deal agreed: ${o.label ?? o.description}`);
     },
   }],
   entities: { find: () => undefined, name: (_api, id) => id, controlledBy: () => false },

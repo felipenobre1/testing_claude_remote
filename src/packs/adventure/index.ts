@@ -286,11 +286,9 @@ export const adventurePack: GamePack = {
       return `${o.label ?? o.description}${pays ? ` for ${api.money(Math.round(pays * 100))}` : gets ? ` at ${api.money(Math.round(gets * 100))}` : ''}`;
     },
     execute: (api, o) => {
-      const from = api.ensureAccount('character', o.fromCharacterId), to = api.ensureAccount('character', o.toCharacterId);
       const pays = Math.round((o.terms.price_offerer_pays ?? 0) * 100), gets = Math.round((o.terms.price_offerer_receives ?? 0) * 100);
-      if (pays) api.move(from, to, pays, o.label ?? 'deal', 'deal');
-      if (gets) api.move(to, from, gets, o.label ?? 'deal', 'deal');
-      api.results.push(`✓ Deal: ${o.label ?? o.description}`);
+      const ok = api.payBetween(o.fromCharacterId, o.toCharacterId, pays, o.label ?? 'deal', 'deal') && api.payBetween(o.toCharacterId, o.fromCharacterId, gets, o.label ?? 'deal', 'deal');
+      if (ok) api.results.push(`✓ Deal: ${o.label ?? o.description}`);
     },
   }],
   entities: { find: () => undefined, name: (_api, id) => id, controlledBy: () => false },
