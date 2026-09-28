@@ -41,6 +41,7 @@ export interface NpcContextInput {
   economy?: string; // pack state this NPC is part of, offers and promises involving them (built by the world planner)
   privateSituation?: string; // this NPC's own decision state (they know their own limits); never shown to anyone else
   resolvedDecision?: string; // engine-resolved outcome to portray (portrayal call only)
+  witnessed?: string; // outcomes decided by the game this turn that happened in front of this NPC (a fight, a feat)
   situations?: string; // story threads this NPC is part of
   world?: string; // setting line from the game pack
 }
@@ -204,6 +205,7 @@ export function renderNpcBriefing(p: NpcPerspective, input: NpcContextInput): st
     '',
     ...(input.privateSituation ? ['YOUR PRIVATE SITUATION (only you know this)', input.privateSituation, ''] : []),
     ...(input.resolvedDecision ? ['YOUR DECISION (already settled — express it)', input.resolvedDecision, ''] : []),
+    ...(input.witnessed ? ['WHAT JUST HAPPENED (decided by the game — your reaction must be consistent with it)', input.witnessed, ''] : []),
     'WEB PAGES YOU HAVE OPENED (exactly as they looked when you opened them)',
     p.documents.length ? p.documents.map((d) => renderDocument(d.doc, d.openedNow)).join('\n\n') : '(none)',
     '',
@@ -275,7 +277,7 @@ export function renderPlayerBriefing(p: PlayerPerspective, input: string, econom
     `RECENT ACTIVITY:\n${p.activity.map((e) => `[${e.gameTime}] ${e.summary}`).join('\n') || '(none)'}`,
     `TIME: ${formatGameTime(p.gameTime)} (${world})`,
     `LOCATION: ${p.scene.location}. ${p.scene.description}`,
-    `KNOWN CHARACTERS: ${p.knownCharacters.map((c) => `${c.name} (${c.role})`).join('; ') || '(none yet)'}`,
+    `KNOWN CHARACTERS: ${p.knownCharacters.map((c) => `${c.name} (${c.role}${c.status && c.status !== 'alive' ? `, ${c.status.toUpperCase()}` : ''})`).join('; ') || '(none yet)'}`,
     `OPEN CONVERSATION: ${p.interaction ? `${p.interaction.channel} with ${partner.join(', ')}` : 'none'}`,
     'RECENT CONVERSATION LINES:',
     p.conversation.map((l) => (l.speakerName ? `${l.speakerName}: ${l.text}` : `[${l.text}]`)).join('\n') || '(none)',

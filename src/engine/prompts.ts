@@ -8,6 +8,21 @@ export interface WorldContext {
   homes: string; // where new people plausibly live
   /** Shared background everyone in the world knows (recent history, the state of things), from the WorldSeed. */
   background: string | null;
+  violence: 'none' | 'non_graphic' | 'graphic';
+}
+
+/** Content rules by world setting. Sexual content is never produced; self-harm by the player is handled outside the fiction. */
+export function contentRule(v: WorldContext['violence'], who: 'narrator' | 'npc'): string {
+  const sex = 'Never produce sexual content.';
+  if (v === 'graphic') {
+    return who === 'npc'
+      ? `${sex} Violence is part of this world: you may threaten, fight, wound or kill as your character would, and describe it bluntly. What actually happens in a fight is decided by the game (see WHAT JUST HAPPENED).`
+      : `${sex} Violence is part of this world and is shown in full: fights, wounds, pain and death are described vividly when they happen. The game decides how fights and risky acts turn out.`;
+  }
+  if (v === 'none') return `${sex} This world has no physical violence: conflict is resolved in other ways; narration stops before any violent act and never resolves it.`;
+  return who === 'npc'
+    ? `${sex} Violence can happen and has real consequences, but describe it without gore. What actually happens in a fight is decided by the game.`
+    : `${sex} Violence can happen with real consequences (injury, death), described without gore. The game decides how fights and risky acts turn out.`;
 }
 
 const backgroundBlock = (bg: string | null) => (bg ? `\nBACKGROUND everyone here knows (recent history and the state of things): ${bg}\n` : '');
@@ -30,7 +45,7 @@ Split the input into what is observable and what is private:
 - newLocation: only when ${playerName} moves somewhere (e.g. "Home — kitchen"). null otherwise.
 - newSceneDescription: when newLocation is set, one or two sentences describing what is there now (only plausible, ordinary details; objects left behind stay behind). null otherwise.
 - safety: "self_harm" if ${playerName} attempts, plans or describes hurting or killing themselves; "serious_violence" if ${playerName} tries to seriously injure or kill someone; otherwise "none".
-- The game never depicts graphic violence, self-harm or sexual content. Narration stops before any such act and never resolves it (no injuries, no deaths).
+- ${contentRule(world.violence, 'narrator')} Self-harm by ${playerName} is never simulated.
 - minutesElapsed: realistic minutes for ${playerName}'s own actions this turn (0 for just talking). Time is a real resource: buying a domain ≈ 15, a landing page ≈ 240–600, a working prototype ≈ days (e.g. 2880), "I wait until Monday" = the real gap. Max 10080 (one week) per turn.
 - actions: ONLY things with deterministic consequences (resources, offers, promises, world-specific actions) that ${playerName} actually does THIS turn (not plans, not hypotheticals, not things said to be done in the past). Use [] for everything else.
   - pay: paying the outside world (e.g. a service or a purchase). fromEntityName = something ${playerName} controls that pays, else null. recurringMonthly for subscriptions. Amounts in ${pack.currency.code}. Use the amount from KNOWN PRICES when the item is listed (description = that item's name); otherwise a realistic price for this world — it will be remembered. Small everyday spending is already covered by monthly living costs: don't create pay actions for a coffee unless it matters.
@@ -54,7 +69,7 @@ ${pack.prompts.interpretActions}
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;
 }
 
-export function npcSystemPrompt(npc: Character, world: string, background: string | null = null): string {
+export function npcSystemPrompt(npc: Character, world: string, background: string | null = null, violence: WorldContext['violence'] = 'non_graphic'): string {
   return `You are ${npc.name}, one character in a realistic, persistent living world set in ${world}. Stay fully in character.${backgroundBlock(background)}
 
 YOU ARE NOT AN ASSISTANT
@@ -70,7 +85,7 @@ HARD RULES
 - What people tell you is a claim, not proof. If someone says they are rich, you believe (or doubt) that they SAID it.
 - You are a real person, not an assistant. Be realistic: you can be busy, distracted, skeptical, blunt, uninterested or warm, as your personality and the moment suggest. Don't flatter. Keep replies natural in length for the channel.
 - Speak in the language the other person uses.
-- Never produce sexual content or graphic violence. If someone behaves inappropriately, react as a real person would (refuse, set boundaries, end the conversation).
+- ${contentRule(violence, 'npc')} If someone behaves inappropriately, react as a real person would (refuse, set boundaries, fight back, end the conversation).
 - Sound like a real person of your age and background, not a consultant. On text messages write like people text: short, casual, sometimes just a few words. Don't end every reply with a question. Don't summarise what the other person said back to them. You have your own life, mood and priorities — sometimes you're busy, bored, joking or not that interested.
 - Money, holdings, offers and promises under YOUR AFFAIRS are exact and real. You cannot change numbers.
 - SITUATIONS IN YOUR LIFE are things you are living through. If talking with someone genuinely shifts how you see one of them, you may record it with thread_signal (the factor it affects, −2…+2 from your point of view).

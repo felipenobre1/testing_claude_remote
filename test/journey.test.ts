@@ -19,7 +19,7 @@ import { fixedRng, interp, lastPrompt, tmpDbPath } from './helpers.ts';
 function start() {
   const store = new Store(tmpDbPath());
   const llm = new ScriptedProvider();
-  const engine = new Engine(store, llm, { pack: startupPack, rng: fixedRng(0.5) });
+  const engine = new Engine(store, llm, { pack: startupPack, rng: fixedRng(0.5), beats: false, narrator: false });
   const { game, player, opening } = engine.newGame();
   const product = () => companyRepo.list(store, game.id)[0]!;
   const cash = () => store.getAccountOf(game.id, 'character', player.id)!.balanceCents;
@@ -176,7 +176,7 @@ test('world creation checks the starting position; the Copilot is told the stage
   assert.ok(bad.problems.includes('"Old meetup" needs a date/time after the start'));
   assert.equal(compileDraft(STARTUP_TEMPLATE, PACKS, { now }).problems.length, 0);
   // An Open World draft needs none of this.
-  assert.equal(compileDraft({ ...EMPTY_DRAFT, ...PACKS[1]!.worldCreation.template }, PACKS, { now }).problems.length, 0);
+  assert.equal(compileDraft({ ...EMPTY_DRAFT, ...PACKS.find((p) => p.id === 'open')!.worldCreation.template }, PACKS, { now }).problems.length, 0);
 
   const sys = copilotSystemPrompt(PACKS);
   assert.match(sys, /startingStage options: idea \(nothing built[^)]*\); mvp \([^)]*\); first_users \([^)]*\) — default mvp/);

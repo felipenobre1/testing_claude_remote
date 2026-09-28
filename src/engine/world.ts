@@ -270,7 +270,8 @@ Propose at most two NEW situations (story threads) and any ESCALATIONS of existi
 - A thread is decided eventually by one actor (never the player): say what they are weighing, which factors matter (−2…+2 from their point of view), and what happens either way.
 - messageToPlayer: only if that person would plausibly tell the player; otherwise null (the player may never find out).
 - Respect the bible: its tone, realism, player significance and design principles hold even if the player later becomes powerful.
-- Most of the time the right answer is no new thread. Prefer quiet realism over drama. Return JSON only.`;
+- Follow the STORY PACE in the bible. quiet: most of the time the right answer is no new thread. steady: a new situation every few days. eventful: most days something new develops, preferably involving the player or touching their ambition (a challenge, a patron, a rival's move, a debt called in).
+- Situations involving the player still need another actor who decides; the player's own choices are theirs. Return JSON only.`;
 }
 
 export function directorUserPrompt(p: WorldPlanner, store: Store, at: string): string {

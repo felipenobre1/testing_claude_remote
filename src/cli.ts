@@ -14,7 +14,7 @@ const USAGE = `Living Story Engine
 
   npm start -- new                          design a new world with the World Creation Copilot, then play
                                             (resumes your unfinished world draft if there is one; --fresh starts over)
-  npm start -- new --quick [--pack startup] [--name Felipe]
+  npm start -- new --quick [--pack startup|adventure|open] [--name Felipe]
                                             skip the conversation: start the pack's example world
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
@@ -115,6 +115,15 @@ async function working<T>(label: string, p: Promise<T>): Promise<T> {
   }
 }
 
+/** In a literary world the narrator writes the opening scene; otherwise (or if it fails) the plain opening is shown. */
+async function narratedOpening(engine: Engine, gameId: string, plain: string): Promise<string> {
+  const prose = await working('the narrator is setting the scene', engine.openingProse(gameId));
+  if (!prose) return plain;
+  const header = plain.split('\n')[0];
+  const coming = plain.includes('Coming up:') ? `\n\n${plain.slice(plain.indexOf('Coming up:')).replace(/\n\nWhat do you do\?$/, '')}` : '';
+  return `${header}\n\n${prose}${coming}`;
+}
+
 async function design(reader: Reader, creation: WorldCreation, draftId: string, intro: string): Promise<CreationResult | null> {
   console.log(`\n${intro}\n\n(/draft shows what's decided · /finalize shows the final summary · /quit saves the draft for later)\n`);
   {
@@ -190,7 +199,7 @@ async function main() {
         if (!pack) return console.error(`Unknown pack. Available: ${PACKS.map((p) => p.id).join(', ')}`);
         const engine = liveEngine(store, pack, llm);
         const { game, opening } = engine.newGame({ playerName: flags.name as string | undefined });
-        return await play(reader(), engine, game.id, Boolean(flags.debug), opening);
+        return await play(reader(), engine, game.id, Boolean(flags.debug), await narratedOpening(engine, game.id, opening));
       }
       const creation = new WorldCreation(store, llm, { packs: PACKS });
       const open = flags.fresh ? undefined : creation.latestOpen();
@@ -205,7 +214,8 @@ async function main() {
       const created = await design(reader(), creation, draftId, intro);
       if (!created?.gameId) return;
       const game = store.getGame(created.gameId)!;
-      await play(reader(), liveEngine(store, packById(game.packId)!, llm), game.id, Boolean(flags.debug), created.opening!);
+      const engine = liveEngine(store, packById(game.packId)!, llm);
+      await play(reader(), engine, game.id, Boolean(flags.debug), await narratedOpening(engine, game.id, created.opening!));
     } else if (cmd === 'continue') {
       const gameId = rest[0] ?? latest();
       if (!gameId || !store.getGame(gameId)) return console.error('No game to continue. Start one with: npm start -- new');

@@ -568,6 +568,9 @@ export class Store {
   listDraftMessages(draftId: string): { role: 'player' | 'copilot'; text: string }[] {
     return this.all('SELECT role, text FROM draft_messages WHERE draft_id = :d ORDER BY seq', { d: draftId }).map((r) => ({ role: r.role, text: r.text }));
   }
+  setCharacterStatus(id: string, status: 'alive' | 'dead' | 'missing', now: string): void {
+    this.run('UPDATE characters SET status = :status, updated_at = :now WHERE id = :id', { id, status, now });
+  }
   upsertPrice(p: { gameId: string; item: string; priceCents: number; source: string; gameTime: string }): void {
     this.run(`INSERT INTO prices (game_id, item_key, item, price_cents, source, created_game_time) VALUES (:g, :k, :item, :c, :src, :t)
       ON CONFLICT (game_id, item_key) DO NOTHING`, { g: p.gameId, k: priceKey(p.item), item: p.item, c: p.priceCents, src: p.source, t: p.gameTime });
@@ -647,7 +650,7 @@ function mapCharacter(r: Row): Character {
     id: r.id, gameId: r.game_id, isPlayer: r.is_player === 1, name: r.name, age: r.age, gender: r.gender, role: r.role,
     occupation: r.occupation, background: r.background, personality: r.personality,
     traits: parse(r.traits_json), values: parse(r.values_json), goals: parse(r.goals_json), fears: parse(r.fears_json),
-    location: r.location, origin: r.origin, createdAt: r.created_at, updatedAt: r.updated_at,
+    location: r.location, origin: r.origin, status: r.status ?? 'alive', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 function mapRelationship(r: Row): Relationship {

@@ -28,7 +28,7 @@ const DESERT: WorldDraft = {
   canonPolicy: 'alternate_from_start',
   setting: { place: 'Arrakeen, Arrakis', era: 'the years of Harkonnen rule', startDate: '2026-05-01T06:00', timezone: 'UTC', description: 'A garrison city of sand and heat.' },
   style: { tone: 'harsh, political', realism: 'high — water is life and every favour has a price', difficulty: 'hard', narrativeStyle: null,
-    playerSignificance: 'insignificant: an apprentice nobody at court has heard of' },
+    playerSignificance: 'insignificant: an apprentice nobody at court has heard of', pace: 'quiet', violence: 'graphic', narration: 'concise' },
   designPrinciples: ['Do not manufacture destiny around the player.', 'Great houses never notice the player without a concrete reason.'],
   worldRules: ['Water is the scarcest resource; spice is controlled by the ruling house.'],
   player: { ...EMPTY_DRAFT.player, name: 'Kaleb', age: 17, occupation: 'water-seller\'s apprentice', background: 'Born in the lower city; apprenticed to a water-seller since age ten.',

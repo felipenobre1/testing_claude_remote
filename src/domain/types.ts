@@ -57,6 +57,8 @@ export interface Character {
   fears: string[];
   location: string;
   origin: 'seed' | 'generated';
+  /** Alive unless the story killed them. The dead stay dead. */
+  status?: 'alive' | 'dead' | 'missing';
   createdAt: string;
   updatedAt: string;
 }
@@ -325,6 +327,8 @@ export interface TurnResponse {
   text: string; // fully composed player-facing text
   /** Ideas for what the player could do next (grounded in their situation; never outcomes). */
   suggestions?: string[];
+  /** Title of the scene beat that came to the player this turn, if any. */
+  beat?: string;
   replayed?: boolean;
 }
 

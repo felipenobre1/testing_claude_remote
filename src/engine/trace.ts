@@ -37,6 +37,8 @@ export interface Trace {
   interpretation?: InterpretResult;
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
+  beat?: unknown; // the scene beat that happened this turn (see engine/story.ts)
+  narratorFailed?: string; // the narrator's output was rejected twice; the concise text was used
   retrieval?: ReturnType<typeof perspectiveTrace> & { economyIds?: string[] };
   documents?: { id: string; url: string; finalUrl: string; status: string; title: string | null; chars: number; error: string | null }[];
   npcOutput?: NpcTurnEnvelope;

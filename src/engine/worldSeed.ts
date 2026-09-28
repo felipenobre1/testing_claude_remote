@@ -74,6 +74,7 @@ export function compileDraft(draft: WorldDraft, packs: GamePack[], opts: { gameI
     style: {
       tone: d.style.tone!, realism: d.style.realism!, difficulty: d.style.difficulty, narrativeStyle: d.style.narrativeStyle,
       playerSignificance: d.style.playerSignificance!, designPrinciples: d.designPrinciples,
+      pace: d.style.pace ?? 'steady', violence: d.style.violence ?? 'non_graphic', narration: d.style.narration ?? 'literary',
     },
     player: { ...d.player, name: d.player.name!, age: d.player.age!, background: d.player.background! },
     actors: d.actors,
@@ -183,10 +184,27 @@ export function bibleText(seed: WorldSeed): string {
     `WORLD: ${seed.world.place}, ${seed.world.era}${seed.world.sourceWorld ? ` (source: ${seed.world.sourceWorld})` : ''}. Canon policy: ${seed.world.canonPolicy.replace(/_/g, ' ')}.`,
     `TONE: ${seed.style.tone}. REALISM: ${seed.style.realism}.${seed.style.difficulty ? ` DIFFICULTY: ${seed.style.difficulty}.` : ''}${seed.style.narrativeStyle ? ` STYLE: ${seed.style.narrativeStyle}.` : ''}`,
     `PLAYER SIGNIFICANCE: ${seed.style.playerSignificance}`,
+    `STORY PACE: ${paceOf(seed)}`,
+    ...(seed.player.ambition ? [`${seed.player.name.toUpperCase()}'S AMBITION: ${seed.player.ambition} — the story should keep putting opportunities, rivals, costs and hard choices on the road to it (never hand it over).`] : []),
+    `VIOLENCE: ${violenceRule(seed.style.violence ?? 'non_graphic')}`,
     ...(seed.world.historicalContext ? [`RECENT HISTORY AND CONTEXT (world truth at the start): ${seed.world.historicalContext}`] : []),
     ...(seed.style.designPrinciples.length ? ['DESIGN PRINCIPLES (binding for the whole game):', ...seed.style.designPrinciples.map((x) => `- ${x}`)] : []),
     ...(seed.world.rules.length ? ['WORLD RULES:', ...seed.world.rules.map((x) => `- ${x}`)] : []),
   ].join('\n');
+}
+
+export function paceOf(seed: WorldSeed): string {
+  switch (seed.style.pace ?? 'steady') {
+    case 'quiet': return 'quiet — the world mostly waits for the player; developments are rare and slow';
+    case 'eventful': return 'eventful — the world keeps coming to the player: people arrive, trouble finds them, choices are forced; rarely a dull turn';
+    default: return 'steady — the world regularly reaches the player (people get in touch, situations develop) without constant drama';
+  }
+}
+
+export function violenceRule(v: 'none' | 'non_graphic' | 'graphic'): string {
+  if (v === 'graphic') return 'allowed and shown in full: fights, wounds, pain and death are described vividly and concretely when they happen. No softening.';
+  if (v === 'none') return 'none: conflicts are resolved without physical violence.';
+  return 'can happen and has real consequences (injury, death), but is described without gore.';
 }
 
 /** What everyone in the world knows: the recent history agreed at creation (kept short for in-scene prompts). */

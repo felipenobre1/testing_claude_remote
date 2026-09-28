@@ -30,7 +30,7 @@ const LANDING = 'Grade Economy — Your grades are your salary. Students earn Gr
 function session(path: string, fetcher: PageFetcher | null) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  return { store, llm, engine: new Engine(store, llm, { pack: classicStartupPack, fetcher }), close: () => store.close() };
+  return { store, llm, engine: new Engine(store, llm, { pack: classicStartupPack, fetcher, beats: false, narrator: false }), close: () => store.close() };
 }
 
 test('extractUrls finds links, normalises them, and ignores non-links', () => {

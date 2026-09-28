@@ -20,11 +20,12 @@ import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
 import { decisionStateProblems, validateChanges, validateCharacterProposal, validatePortrayal, type AcceptedChange, type Rejection } from './validate.ts';
 import { extractUrls, type PageFetcher } from './web.ts';
-import { applyOps, npcThreadsBriefing, npcWorldBriefing, playerWorldBriefing, WorldPlanner, type PlanContext } from './planner.ts';
+import { applyOps, npcThreadsBriefing, npcWorldBriefing, opportunityLine, playerWorldBriefing, upcoming, WorldPlanner, type PlanContext } from './planner.ts';
 import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
+import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatSchema, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
@@ -53,6 +54,7 @@ class AlreadyFinal extends Error {
 /** Everything a turn wants to write, assembled before the transaction opens. */
 interface WritePlan {
   newCharacter: { character: Character; relationship: Relationship } | null;
+  extraCharacters: { character: Character; relationship: Relationship }[]; // people who arrived in a scene beat
   interactionsToInsert: Interaction[];
   interactionsToEnd: { id: string; gameTime: string }[];
   events: GameEvent[];
@@ -67,6 +69,8 @@ export class Engine {
   readonly llm: LLMProvider;
   private now: () => string;
   readonly pack: GamePack;
+  private beatsEnabled: boolean;
+  private narratorEnabled: boolean;
   private fetcher: PageFetcher | null;
   private rng: RngFactory;
   private directorEnabled: boolean;
@@ -78,7 +82,11 @@ export class Engine {
    * `rng`: randomness for decisions and world turns, from seeds derived from game + request (tests pass a fixed one).
    * `director`: let the Story Director propose new situations during world turns (one model call per game day).
    */
-  constructor(store: Store, llm: LLMProvider, opts: { pack: GamePack; now?: () => string; fetcher?: PageFetcher | null; rng?: RngFactory; director?: boolean }) {
+  constructor(store: Store, llm: LLMProvider, opts: {
+    pack: GamePack; now?: () => string; fetcher?: PageFetcher | null; rng?: RngFactory; director?: boolean;
+    /** The storyteller: scene beats (by the world's pace) and literary narration (by the world's narration style). Default on. */
+    beats?: boolean; narrator?: boolean;
+  }) {
     this.store = store;
     this.llm = llm;
     this.pack = opts.pack;
@@ -86,6 +94,8 @@ export class Engine {
     this.fetcher = opts.fetcher ?? null;
     this.rng = opts.rng ?? seededRng;
     this.directorEnabled = opts.director ?? false;
+    this.beatsEnabled = opts.beats ?? true;
+    this.narratorEnabled = opts.narrator ?? true;
     this.interpretSchema = interpretSchemaFor(this.pack.actions.map((a) => a.schema));
     store.migratePack(this.pack.id, this.pack.migrations);
   }
@@ -102,6 +112,39 @@ export class Engine {
     return createGameFromSeed(this.store, this.pack, seed, this.now());
   }
 
+  /**
+   * In a literary world, the narrator writes the opening scene (who you are, where you are, what presses on you).
+   * Returns null when narration is concise, the narrator is off, or it fails — the caller shows the plain opening then.
+   */
+  async openingProse(gameId: string): Promise<string | null> {
+    const world = this.worldOf(gameId);
+    if (!this.narratorEnabled || (world.seed.style.narration ?? 'literary') !== 'literary') return null;
+    const store = this.store;
+    const game = store.getGame(gameId)!;
+    const player = store.getCharacter(game.playerCharacterId)!;
+    const scene = store.getScene(gameId);
+    const planner = new WorldPlanner({ store, pack: world.pack, gameId, turnId: 'opening', now: this.now(), gameTime: game.gameTime, location: scene.location,
+      player, characters: store.listCharacters(gameId), interaction: null });
+    const seed = world.seed;
+    const input: NarratorInput = {
+      gameTime: game.gameTime, location: scene.location, sceneDescription: scene.description, playerState: world.pack.briefing.player(planner),
+      input: '(the story begins)', playerSaid: null, playerDid: null, draftNarration: '',
+      facts: [
+        'This is the opening of the story: show the reader who they are, where they wake into the world, and what presses on them.',
+        `${player.name}: ${player.background}`, ...(seed.player.ambition ? [`${player.name} dreams ${seed.player.ambition}.`] : []),
+        seed.world.currentSituation, ...seed.initialPressures, ...upcoming(store, gameId, game.gameTime, 14).map((i) => `Coming up: ${opportunityLine(i)}`),
+      ],
+      words: [], conversationEnded: false, choice: null,
+    };
+    try {
+      const res = await this.llm.complete({ task: 'narrate', system: narratorSystemPrompt(world.ctx, world.bible, player.name), user: narratorUserPrompt(input), schemaName: 'narration', schema: NarrationSchema });
+      const parsed = NarrationSchema.safeParse(JSON.parse(res.rawText));
+      return parsed.success ? parsed.data.prose.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The game's setting and design contract, from its immutable WorldSeed. */
   private worldOf(gameId: string): { ctx: WorldContext; bible: string; seed: WorldSeed; pack: GamePack } {
     let seed = this.store.getWorldSeed<WorldSeed>(gameId);
@@ -113,7 +156,7 @@ export class Engine {
     const pack = seed.player.currency ? { ...this.pack, currency: seed.player.currency } : this.pack;
     return {
       seed, bible: bibleText(seed), pack,
-      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed) },
+      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed), violence: seed.style.violence ?? 'non_graphic' },
     };
   }
 
@@ -206,6 +249,8 @@ export class Engine {
       trace.resolution = { kind: 'none' };
     }
 
+    if (target && target.status === 'dead') return this.clarify(trace, game, `${target.name} is dead.`);
+
     // 3. Conversation bookkeeping.
     const t0 = game.gameTime;
     const t1 = addMinutes(t0, interp.minutesElapsed);
@@ -213,7 +258,7 @@ export class Engine {
     const description = interp.newLocation ? interp.newSceneDescription ?? '' : pp.scene.description; // a new place never inherits the old description
     const scene: Scene = { ...pp.scene, location, description, activeCharacterIds: [...pp.scene.activeCharacterIds], updatedAt: now };
     const plan: WritePlan = {
-      newCharacter: null, interactionsToInsert: [], interactionsToEnd: [], events: [], documents: [], changes: [], scene, newGameTime: t1,
+      newCharacter: null, extraCharacters: [], interactionsToInsert: [], interactionsToEnd: [], events: [], documents: [], changes: [], scene, newGameTime: t1,
     };
     const event = (e: Omit<GameEvent, 'id' | 'gameId' | 'turnId' | 'createdAt' | 'location'> & { location?: string | null }): GameEvent => {
       const ev: GameEvent = { id: newId('evt'), gameId: game.id, turnId: trace.turnId, createdAt: now, location, ...e };
@@ -309,7 +354,10 @@ export class Engine {
     let npcOut: NpcTurnEnvelope | null = null;
     // "I hang up and call Sofia": the old call was already ended by the switch above.
     const endRequested = intents.has('end_conversation') && !startedNew;
-    const npcShouldRespond = target && interaction && (startedNew || Boolean(interp.spokenText));
+    // Someone killed this turn does not answer; the conversation is over.
+    const targetDied = Boolean(target && target.status === 'dead');
+    if (targetDied && interaction) { endInteraction(interaction, t1, player.name); interaction = null; }
+    const npcShouldRespond = !targetDied && target && interaction && (startedNew || Boolean(interp.spokenText));
     if (npcShouldRespond && target && interaction) {
       // What the NPC perceives this turn, in order. Never the raw input, never private thoughts.
       const pendingLines: TranscriptLine[] = [];
@@ -329,6 +377,7 @@ export class Engine {
       ctxInput.economy = econView.text;
       ctxInput.situations = npcThreadsBriefing(economy, target.id);
       ctxInput.world = world.ctx.line;
+      if (economy.witnessed.length) ctxInput.witnessed = economy.witnessed.join('\n');
       const perspective = retrieveNpcPerspective(store, ctxInput);
       trace.retrieval = { ...perspectiveTrace(perspective), economyIds: econView.ids };
 
@@ -347,7 +396,7 @@ export class Engine {
 
       trace.validation = [];
       let counterTerms: Record<string, number> | null = null;
-      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background), renderNpcBriefing(perspective, ctxInput),
+      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background, world.ctx.violence), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
           const p = validatePortrayal(out, decision);
@@ -410,19 +459,48 @@ export class Engine {
       conversationEnded = true;
     }
 
-    // 7. Commit atomically, then respond.
-    const results = economy.results;
-    const parts = [interp.narration.trim() || (!npcOut && interp.privateThought ? 'You turn the thought over in your head for a while.' : '')];
-    parts.push(results.slice(0, playerResultCount).join('\n'));
-    if (npcOut && target) {
-      if (npcOut.perceivable.trim()) parts.push(npcOut.perceivable.trim());
-      if (npcOut.dialogue.trim()) parts.push(`${target.name}: “${npcOut.dialogue.trim()}”`);
+    // 8. The storyteller: when the pacing clock says so, the world comes to the player.
+    const seed = world.seed;
+    let beat: SceneBeat | null = null;
+    const conversationOpen = Boolean(interaction && !conversationEnded);
+    if (this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed })) {
+      beat = await this.sceneBeat(trace, game, player, everyone, pending, economy, plan, interp, conversationOpen, world);
     }
-    parts.push(results.slice(playerResultCount, npcResultCount).join('\n'), results.slice(npcResultCount).join('\n'));
+
+    // 9. Compose the turn: literary narration (everything already decided) or the concise game text.
+    const results = economy.results;
+    const beatNewcomer = beat?.newPerson ? plan.extraCharacters.at(-1)?.character : undefined;
+    const words: NarratorInput['words'] = [];
+    if (npcOut && target && npcOut.dialogue.trim()) words.push({ speaker: target.name, text: npcOut.dialogue.trim(), how: npcOut.perceivable.trim() });
+    if (beat?.opensConversation) words.push({ speaker: beat.opensConversation.name, text: beat.opensConversation.openingLine.trim(), how: '' });
+    let prose: string | null = null;
+    if (this.narratorEnabled && (seed.style.narration ?? 'literary') === 'literary') {
+      prose = await this.narrate(trace, world, player, economy, {
+        gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
+        input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
+        facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
+        words, conversationEnded, choice: beat?.choice ?? null,
+      });
+    }
+    const parts: string[] = [];
+    if (prose) {
+      parts.push(prose, results.join('\n'));
+    } else {
+      parts.push(interp.narration.trim() || (!npcOut && interp.privateThought ? 'You turn the thought over in your head for a while.' : ''));
+      parts.push(results.slice(0, playerResultCount).join('\n'));
+      if (npcOut && target) {
+        if (npcOut.perceivable.trim()) parts.push(npcOut.perceivable.trim());
+        if (npcOut.dialogue.trim()) parts.push(`${target.name}: “${npcOut.dialogue.trim()}”`);
+      }
+      parts.push(results.slice(playerResultCount, npcResultCount).join('\n'), results.slice(npcResultCount).join('\n'));
+      if (beat) {
+        parts.push(`⚡ ${beat.perceived}${beat.opensConversation ? `\n${beat.opensConversation.name}: “${beat.opensConversation.openingLine.trim()}”` : ''}\n→ ${beat.choice}`);
+      }
+    }
     if (conversationEnded) parts.push(`[The ${label(interaction!.channel)} has ended.]`);
     const response = this.response(trace, plan.newGameTime, {
       status: 'committed',
-      narration: interp.narration,
+      narration: prose ?? interp.narration,
       npc: npcOut && target
         ? { characterId: target.id, name: target.name, dialogue: npcOut.dialogue, perceivable: npcOut.perceivable, isNew: Boolean(pending) }
         : null,
@@ -430,6 +508,7 @@ export class Engine {
       results,
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
       suggestions: interp.suggestions ?? [],
+      ...(beat ? { beat: beat.title } : {}),
     });
     this.commit(game, player, plan, economy, trace, response, input);
     return response;
@@ -450,11 +529,11 @@ export class Engine {
         throw new RevisionConflict(`game changed during the turn (revision ${game.revision} → ${current.revision}); retry`);
       }
 
-      if (plan.newCharacter) {
-        store.insertCharacter(plan.newCharacter.character);
-        w('characters', 'insert', plan.newCharacter.character.id, plan.newCharacter.character.name);
-        store.upsertRelationship(plan.newCharacter.relationship);
-        w('relationships', 'insert', plan.newCharacter.relationship.id, 'backstory');
+      for (const nc of [...(plan.newCharacter ? [plan.newCharacter] : []), ...plan.extraCharacters]) {
+        store.insertCharacter(nc.character);
+        w('characters', 'insert', nc.character.id, nc.character.name);
+        store.upsertRelationship(nc.relationship);
+        w('relationships', 'insert', nc.relationship.id, 'backstory');
       }
       for (const i of plan.interactionsToInsert) {
         store.insertInteraction(i);
@@ -601,6 +680,70 @@ export class Engine {
     const resolution = resolveDecision({ state, option: { kind: offer.kind, terms: offer.terms }, appraisal, rng: this.rng(seed), seed });
     trace.decision = { offerId: offer.id, npcId: npc.id, stateSource, state, appraisal, resolution };
     return { offer, state, resolution, appraisal };
+  }
+
+  /** A scene beat: proposed by the model, validated against the world, made canonical in this turn's plan. */
+  private async sceneBeat(trace: Trace, game: Game, player: Character, everyone: Character[], pending: PendingCharacter | undefined,
+    economy: WorldPlanner, plan: WritePlan, interp: InterpretResult, conversationOpen: boolean, world: ReturnType<Engine['worldOf']>): Promise<SceneBeat | null> {
+    const store = this.store;
+    const known = pending ? [...everyone, pending.character] : everyone;
+    const recent = [...store.listEventsObservedBy(player.id).slice(-8), ...plan.events, ...economy.events]
+      .filter((e) => e.observers.some((o) => o.characterId === player.id)).slice(-10).map((e) => `[${e.gameTime}] ${e.summary}`);
+    const notes = store.listKnowledgeOf(player.id).slice(-8).map((k) => `- ${k.topic}: ${k.belief}`);
+    const user = beatUserPrompt({
+      gameTime: plan.newGameTime, scene: plan.scene, player, people: known.filter((c) => !c.isPlayer), recent, notes,
+      justNow: [interp.narration, ...economy.results].filter(Boolean).join(' '), playerState: this.pack.briefing.player(economy),
+    });
+    const beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx), user, 'scene_beat', SceneBeatSchema, SceneBeatSchema,
+      (b) => beatProblems(b, { characters: known, playerId: player.id, conversationOpen }));
+    const now = this.now();
+    const at = plan.newGameTime;
+    let newcomer: Character | undefined;
+    if (beat.newPerson) {
+      const p = beat.newPerson;
+      newcomer = {
+        id: newId('chr'), gameId: game.id, isPlayer: false, name: p.name.trim(), age: p.age, gender: p.gender, role: p.role, occupation: p.occupation,
+        background: p.background, personality: p.personality, traits: p.traits, values: p.values, goals: p.goals, fears: p.fears, location: p.location,
+        origin: 'generated', createdAt: now, updatedAt: now,
+      };
+      plan.extraCharacters.push({ character: newcomer, relationship: {
+        id: newId('rel'), gameId: game.id, fromCharacterId: newcomer.id, toCharacterId: player.id, summary: p.relationshipToPlayer,
+        source: 'backstory', sourceEventId: null, createdAt: now, updatedAt: now } });
+    }
+    const idOf = (n: string) => (newcomer && newcomer.name.toLowerCase() === n.toLowerCase() ? newcomer.id : known.find((c) => c.name.toLowerCase() === n.toLowerCase())!.id);
+    const involved = [...beat.involves.map(idOf), ...(newcomer ? [newcomer.id] : [])];
+    const ev = (e: Omit<GameEvent, 'id' | 'gameId' | 'turnId' | 'createdAt'>) => plan.events.push({ id: newId('evt'), gameId: game.id, turnId: trace.turnId, createdAt: now, ...e });
+    ev({ interactionId: null, gameTime: at, type: 'scene_beat', summary: `${beat.title}: ${beat.perceived}`, transcript: [], importance: 3, location: plan.scene.location,
+      participants: involved.map((id) => ({ characterId: id, role: 'actor' as const })),
+      observers: [...new Set([player.id, ...involved])].map((id) => ({ characterId: id, channel: id === player.id ? 'self' as const : 'in_person' as const })) });
+    if (beat.opensConversation) {
+      const speaker = idOf(beat.opensConversation.name);
+      const channel = beat.opensConversation.channel;
+      const interaction: Interaction = { id: newId('int'), gameId: game.id, channel, participantIds: [player.id, speaker], startedGameTime: at, endedGameTime: null, createdAt: now };
+      plan.interactionsToInsert.push(interaction);
+      plan.scene.interactionId = interaction.id;
+      if (channel === 'in_person' && !plan.scene.activeCharacterIds.includes(speaker)) plan.scene.activeCharacterIds.push(speaker);
+      const name = newcomer?.id === speaker ? newcomer.name : known.find((c) => c.id === speaker)!.name;
+      ev({ interactionId: interaction.id, gameTime: at, type: 'conversation_turn', summary: `${name} to ${player.name}: "${beat.opensConversation.openingLine}"`,
+        transcript: [{ speakerId: speaker, speakerName: name, text: beat.opensConversation.openingLine }], importance: 3, location: plan.scene.location,
+        participants: [{ characterId: speaker, role: 'actor' }, { characterId: player.id, role: 'addressee' }],
+        observers: [player.id, speaker].map((id) => ({ characterId: id, channel })) });
+    }
+    trace.beat = beat;
+    return beat;
+  }
+
+  /** Literary narration of a fully decided turn. Falls back to the concise text if the narrator fails twice. */
+  private async narrate(trace: Trace, world: ReturnType<Engine['worldOf']>, player: Character, _economy: WorldPlanner, input: NarratorInput): Promise<string | null> {
+    try {
+      const out = await this.callStructured<{ prose: string }>(trace, 'narrate', narratorSystemPrompt(world.ctx, world.bible, player.name), narratorUserPrompt(input),
+        'narration', NarrationSchema, NarrationSchema, (n) => narrationProblems(n.prose, input.words));
+      return out.prose.trim();
+    } catch (e) {
+      if (!(e instanceof TurnFailure)) throw e;
+      trace.narratorFailed = (e as Error).message;
+      return null;
+    }
   }
 
   private async generateCharacter(trace: Trace, game: Game, player: Character, everyone: Character[], name: string, relationHint: string | null): Promise<PendingCharacter> {

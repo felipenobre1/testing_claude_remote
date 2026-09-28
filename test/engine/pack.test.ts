@@ -23,7 +23,7 @@ const keep: GamePack = {
       ...EMPTY_DRAFT, packId: 'border-keep', premise: 'A caravan master must cross a guarded mountain pass before winter.',
       sourceWorld: null, canonPolicy: 'original_world',
       setting: { place: 'a mountain border keep', era: 'the year 1204', startDate: '1204-10-01T07:00', timezone: 'UTC', description: null },
-      style: { tone: 'austere', realism: 'harsh', difficulty: null, narrativeStyle: null, playerSignificance: 'a merchant among many' },
+      style: { tone: 'austere', realism: 'harsh', difficulty: null, narrativeStyle: null, playerSignificance: 'a merchant among many', pace: 'quiet', violence: 'non_graphic', narration: 'concise' },
       player: { ...EMPTY_DRAFT.player, name: 'Edric', age: 24, occupation: 'caravan master', background: 'Leads a small caravan of wool traders.',
         skills: ['stubborn'], goals: ['cross the pass before winter'], location: 'the valley road', startingMoney: 200 },
       currentSituation: 'The gate is shut.',

@@ -16,6 +16,13 @@ export const CANON_POLICIES = [
 ] as const;
 export type CanonPolicy = (typeof CANON_POLICIES)[number];
 
+/** How hard the world pushes the story at the player: quiet (waits for them), steady, eventful (keeps forcing choices). */
+export const PACES = ['quiet', 'steady', 'eventful'] as const;
+/** How violence is portrayed: not at all, non-graphic (happens, not dwelt on), graphic (shown in full). */
+export const VIOLENCE = ['none', 'non_graphic', 'graphic'] as const;
+/** concise = short game-like text; literary = a narrator writes each turn like a novel. */
+export const NARRATION = ['concise', 'literary'] as const;
+
 const text = (max: number) => z.string().max(max);
 const opt = (max: number) => z.string().max(max).nullable();
 
@@ -80,6 +87,9 @@ export const WorldDraftSchema = z.object({
     difficulty: opt(200),
     narrativeStyle: opt(200),
     playerSignificance: opt(200), // e.g. "starts insignificant; no chosen one"
+    pace: z.enum(PACES).nullable(),
+    violence: z.enum(VIOLENCE).nullable(),
+    narration: z.enum(NARRATION).nullable(),
   }),
   designPrinciples: z.array(text(240)).max(10), // e.g. "do not manufacture destiny around the player"
   worldRules: z.array(text(240)).max(10), // physics, technology or magic, institutions
@@ -93,6 +103,8 @@ export const WorldDraftSchema = z.object({
     skills: z.array(text(120)).max(8),
     goals: z.array(text(200)).max(5),
     fears: z.array(text(200)).max(5),
+    ambition: opt(300), // what they dream of becoming — the story pushes toward (and against) it
+    attributes: z.array(z.strictObject({ key: text(40), value: z.number() })).max(10), // numeric traits a pack reads (e.g. combat 2)
     location: opt(160), // where they live
     circumstances: z.array(text(200)).max(6), // canonical facts about their situation ("lives with parents")
     startingMoney: z.number().nullable(), // in the world's currency (major units)
@@ -124,9 +136,9 @@ export type WorldDraft = z.infer<typeof WorldDraftSchema>;
 export const EMPTY_DRAFT: WorldDraft = {
   packId: null, premise: null, sourceWorld: null, canonPolicy: null, startingStage: null,
   setting: { place: null, era: null, startDate: null, timezone: null, description: null },
-  style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null },
+  style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null, pace: null, violence: null, narration: null },
   designPrinciples: [], worldRules: [],
-  player: { name: null, age: null, gender: null, occupation: null, background: null, personality: null, skills: [], goals: [], fears: [], location: null,
+  player: { name: null, age: null, gender: null, occupation: null, background: null, personality: null, skills: [], goals: [], fears: [], ambition: null, attributes: [], location: null,
     circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [], assets: [] },
   economy: { priceList: [], livingCosts: [], income: [] }, openLeads: [],
   locations: [], factions: [], actors: [], historicalContext: null, currentSituation: null, initialPressures: [], initialSituations: [],
@@ -199,6 +211,9 @@ export interface WorldSeed {
     narrativeStyle: string | null;
     playerSignificance: string;
     designPrinciples: string[];
+    pace: (typeof PACES)[number];
+    violence: (typeof VIOLENCE)[number];
+    narration: (typeof NARRATION)[number];
   };
   player: WorldDraft['player'] & { name: string; age: number; background: string };
   actors: WorldDraft['actors'];

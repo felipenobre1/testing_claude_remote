@@ -50,7 +50,8 @@ export type PlannedOp =
   | { op: 'schedule'; item: ScheduledItem }
   | { op: 'schedule_done'; id: string }
   | { op: 'upsert_price'; gameId: string; item: string; priceCents: number; gameTime: string }
-  | { op: 'upsert_knowledge'; knowledge: Knowledge };
+  | { op: 'upsert_knowledge'; knowledge: Knowledge }
+  | { op: 'set_character_status'; characterId: string; status: 'alive' | 'dead' | 'missing' };
 
 export interface PlanContext {
   store: Store;
@@ -76,6 +77,8 @@ export class WorldPlanner {
   readonly events: GameEvent[] = [];
   readonly results: string[] = []; // deterministic lines shown to the player
   readonly rejected: { action: unknown; reason: string }[] = [];
+  /** Outcomes this turn that people present witnessed (fights, feats) — the NPC's portrayal must be consistent with them. */
+  readonly witnessed: string[] = [];
   readonly ctx: PlanContext;
   readonly packState: PackTurnState;
 
@@ -179,6 +182,12 @@ export class WorldPlanner {
     if (cents > 0 && r.amountCents === cents) return;
     if (cents > 0) r.amountCents = cents; else r.active = false;
     this.ops.push({ op: 'update_recurring', recurring: { ...r } });
+  }
+  /** A character dies (or goes missing). Applied at commit; they can no longer be talked to. */
+  setCharacterStatus(characterId: string, status: 'alive' | 'dead' | 'missing') {
+    const c = this.ctx.characters.find((x) => x.id === characterId);
+    if (c) c.status = status;
+    this.ops.push({ op: 'set_character_status', characterId, status });
   }
   saveDecisionState(characterId: string, domain: string, state: DecisionState) {
     this.decisionStates.set(`${characterId}/${domain}`, state);
@@ -562,6 +571,7 @@ export function applyOps(store: Store, planner: WorldPlanner): { table: string; 
       case 'schedule': store.insertScheduled(o.item); writes.push({ table: 'world_schedule', op: 'insert', id: o.item.id, note: `${o.item.kind} @ ${o.item.dueGameTime}` }); break;
       case 'schedule_done': store.setScheduledStatus(o.id, 'done'); writes.push({ table: 'world_schedule', op: 'update', id: o.id, note: 'done' }); break;
       case 'upsert_price': store.upsertPrice({ gameId: o.gameId, item: o.item, priceCents: o.priceCents, source: 'paid', gameTime: o.gameTime }); writes.push({ table: 'prices', op: 'upsert', id: priceKey(o.item), note: money(o.priceCents) }); break;
+      case 'set_character_status': store.setCharacterStatus(o.characterId, o.status, planner.ctx.now); writes.push({ table: 'characters', op: 'update', id: o.characterId, note: o.status }); break;
       case 'upsert_knowledge': { const r = store.upsertKnowledge(o.knowledge); writes.push({ table: 'knowledge', op: r.op, id: r.id, note: o.knowledge.topic }); break; }
     }
   }

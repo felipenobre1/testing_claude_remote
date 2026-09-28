@@ -19,7 +19,7 @@ export function tmpDbPath(): string {
 export function openSession(path: string, opts: { rng?: (seed: string) => () => number; director?: boolean } = {}) {
   const store = new Store(path);
   const llm = new ScriptedProvider();
-  const engine = new Engine(store, llm, { pack: classicStartupPack, ...opts });
+  const engine = new Engine(store, llm, { pack: classicStartupPack, beats: false, narrator: false, ...opts });
   return { store, llm, engine, close: () => store.close() };
 }
 

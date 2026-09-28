@@ -43,6 +43,7 @@ export OPENAI_MODEL=gpt-6-luna   # optional (default gpt-6-luna)
 npm start -- new              # design a world with the Copilot, approve it, play (resumes an unfinished draft)
 npm start -- new --fresh      # start a new draft even if one is unfinished
 npm start -- new --quick      # skip the conversation: the default Startup world (Felipe, his MVP, €600, Milan)
+npm start -- new --quick --pack adventure   # the Adventure pack's example world (desert pit-city, eventful, graphic, literary)
 npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
 npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
@@ -69,6 +70,27 @@ These parts are generic engine features; each pack configures them.
   - `promote_product` — Startup; the game rolls how many people sign up and how many start using the product.
   - `improve_product` — Startup; fixes a known problem, or records one the player discovered.
   - `found_company` — Startup; registers the side project as a company.
+
+## The storyteller: the world comes to you, and each turn reads like a book
+
+These are generic engine features. Each world sets them at creation (`style.pace`, `style.violence`, `style.narration`, `player.ambition`), and they live in its immutable settings.
+
+- **Your ambition drives the story.** The Copilot records what you dream of becoming. The Director, the scene beats and the narrator all see it and keep putting chances, rivals, costs and hard choices on the road to it. They never simply hand it over.
+- **Scene beats.** A pacing clock set by the world's pace (quiet: never; steady: after 4 quiet turns; eventful: after 2; any long time skip) decides *when* something happens to you. The model proposes *what*: an arrival, a message, an encounter, a threat, an opportunity. It must be grounded in existing people, what just happened and your ambition. The engine validates it: people must exist and be alive, and a new person gets a full profile. It becomes canonical, and can open a conversation, so the stranger is talking to you. It ends with the decision it forces. (`engine/story.ts`)
+- **The narrator.** In literary worlds, after the engine has decided everything (actions, fights, decisions, the world turn, the beat), a narrator writes the turn as a passage of a novel: the place, your body, the tension, ending on the choice. It must quote every spoken line exactly, which is checked, or it retries once and then falls back to the plain text. It may not change outcomes, and the engine's result lines are shown under the prose. The opening scene is narrated too.
+- **Next-move ideas** after each turn (`/hints` toggles them). **seek** finds people and ways in, rolled against the time you invest.
+- **Violence per world:** `none`, `non_graphic` or `graphic`. Graphic worlds show fights, wounds and death in full. Sexual content is never produced, and the self-harm check (about the real player, not the character) stays.
+- **Death.** Characters can die (`characters.status`). The dead can't be talked to or fought again and are marked DEAD in every briefing. The player is never killed by a single roll; health floors at 1.
+
+## Game Pack: Adventure
+
+For fantasy and science-fantasy worlds, including a known universe used as reference (Dune-like and so on). Quick start: `npm start -- new --quick --pack adventure` (Rhen, a pit fighter in the original desert city of Ashkar, with a water-debt and an ambition). Or design your own world with the Copilot.
+
+- **fight:** the engine decides. Your combat skill, weapon and armour quality and wounds go against the opponent's threat (or a known person's recorded skill), plus a bounded seeded roll. Outcomes: decisive victory, victory at a cost, stalemate, defeat, crushing defeat. Intent `kill` kills a named person for good. Wounds are light, serious or critical, on a body part. Fighting builds combat practice. Winning in front of witnesses builds fame.
+- **attempt:** risky feats (climb, sneak, persuade, survive) from a skill (combat, stealth, survival, athletics, persuasion, lore; 0–5) against a difficulty; failure costs what was risked.
+- **rest** heals (serious wounds need care). **train** with or without a teacher. **acquire_item** / **part_with_item** handle weapons, armour, gear and valuables, with purchases paid from the ledger.
+- **Fame:** from unknown to "a legend across the known worlds". NPCs hear what people say about you and see your visible wounds. People in the scene *witness* fights and feats: their reactions must match what the engine decided.
+- **The weekly report** covers healing and reputation.
 
 ## World creation
 

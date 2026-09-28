@@ -485,4 +485,8 @@ export const MIGRATIONS: Migration[] = [
     PRIMARY KEY (game_id, item_key)
   );
   `,
+
+  /* v8 — Life and death: characters can die (or go missing); the dead stay dead. */ `
+  ALTER TABLE characters ADD COLUMN status TEXT NOT NULL DEFAULT 'alive' CHECK (status IN ('alive', 'dead', 'missing'));
+  `,
 ];

@@ -32,7 +32,7 @@ export const openPack: GamePack = {
       setting: { place: 'Varessa, a river city', era: 'an early-modern age of canals and printing presses', startDate: '1650-04-02T07:30', timezone: 'UTC',
         description: 'A trading city whose council was replaced by a governor from the capital a month ago.' },
       style: { tone: 'grounded, quiet tension', realism: 'high — actions have costs and people protect themselves', difficulty: null, narrativeStyle: 'second person, concise',
-        playerSignificance: 'an ordinary courier; nobody important' },
+        playerSignificance: 'an ordinary courier; nobody important', pace: 'steady', violence: 'non_graphic', narration: 'literary' },
       designPrinciples: ['Do not manufacture destiny around the player.', 'The powerful do not notice the player unless given a reason.'],
       worldRules: ['No magic. Travel is by boat, horse or on foot; news moves at that speed.'],
       player: { ...EMPTY_DRAFT.player, name: 'Tomas', age: 26, occupation: 'courier', background: 'Carries letters and parcels between merchant houses. Knows the canals well.',
