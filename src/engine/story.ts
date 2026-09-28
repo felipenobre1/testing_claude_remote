@@ -169,6 +169,7 @@ Write this turn as a passage of a novel:
 - Never decide what ${playerName} does, says or feels about a choice next.
 - Never move the reader or let time pass beyond THE FACTS: the passage ends where WHERE THE READER IS AT THE END says, at that time. Do not narrate a departure, a journey or an arrival the facts don't contain. If the reader only said they will go somewhere, they have not gone yet.
 - Characters keep their gender (see PEOPLE HERE); refer to each person the same way every time.
+- The reader's body is exactly THE READER'S CONDITION: never invent injuries, objects in wounds, illness or lost belongings the facts don't state.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
 - Length follows the moment: an exchange of words = one short paragraph around the dialogue; an action with consequences = 1–3 paragraphs; a new place or a big event = up to 5.
 - ${contentRule(world.violence, 'narrator')}

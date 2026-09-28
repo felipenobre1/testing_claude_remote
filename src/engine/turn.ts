@@ -286,7 +286,8 @@ export class Engine {
     if (target && contacting && (!open || !open.participantIds.includes(target.id))) {
       if (open) endInteraction(open, t0, player.name);
       interaction = {
-        id: newId('int'), gameId: game.id, channel: interp.channel ?? 'phone', participantIds: [player.id, target.id],
+        // Talking to someone without saying how means face to face. Phone and message only when the player's words say so.
+        id: newId('int'), gameId: game.id, channel: interp.channel ?? 'in_person', participantIds: [player.id, target.id],
         startedGameTime: t1, endedGameTime: null, createdAt: now,
       };
       plan.interactionsToInsert.push(interaction);

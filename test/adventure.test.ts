@@ -582,3 +582,24 @@ test('someone named by a role gets a real name; fists bruise', async () => {
   assert.match(r.text, /⚔ Kesh Adar attacks you: [^\n]*(bruise|blow) (on|to) the/);
   s.store.close();
 });
+
+test('playtest replay: at the surgeon\'s, talking to him is face to face — never a phone call', async () => {
+  const s = start();
+  const surgeon = {
+    name: 'Nadir Hasel', age: 50, gender: 'male', role: 'cirurgião da Casa Varr', occupation: 'surgeon', background: 'Twenty years stitching pit fighters for House Varr.',
+    personality: 'Dry, precise, unhurried with patients.', traits: ['precise', 'dry'], values: ['craft'], goals: ['Keep the House fighters alive'], fears: ['Losing a patient the House cares about'],
+    location: 'Ashkar', relationshipToPlayer: 'A new patient on a House credit.',
+  };
+  // The interpreter does not say how (channel null) — the player is simply talking to the man in front of him.
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Cirurgião', relationHint: 'surgeon' }, channel: null, spokenText: 'When can I train again?',
+    newLocation: 'House surgeon — treatment room', newSceneDescription: 'Clean instruments on a tray.' }))
+    .enqueue('generate_character', surgeon)
+    .enqueue('npc_turn', npc({ dialogue: 'Not for two days.' }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'pergunto quando posso treinar' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  const scene = s.store.getScene(s.game.id);
+  assert.equal(s.store.getInteraction(scene.interactionId!)!.channel, 'in_person');
+  assert.match(formatStatusLine(s.store, s.game.id), /· with Nadir ──$/);
+  assert.match(s.llm.callsFor('npc_turn')[0]!.system, /Never invent new facts about them \(a hidden fragment, poison/);
+  s.store.close();
+});

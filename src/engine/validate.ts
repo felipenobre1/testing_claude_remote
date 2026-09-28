@@ -136,8 +136,11 @@ const RELATION_LABELS = new Set([
 export function validateCharacterProposal(p: CharacterProposal, requestedName: string, existing: Character[]): string[] {
   const reasons: string[] = [];
   const first = (s: string) => s.trim().split(/\s+/)[0]!.toLowerCase();
-  const requested = requestedName.trim().toLowerCase().replace(/^my\s+/, '');
-  if (!RELATION_LABELS.has(requested) && first(p.name) !== first(requestedName)) {
+  const requested = requestedName.trim().toLowerCase().replace(/^(my|the|a|an|o|a|os|as|um|uma|meu|minha|il|la|lo|el)\s+/, '');
+  // A role or label ("the surgeon", "o cirurgião", "Mom") gets a real name; the label must then be part of their role.
+  const isLabel = RELATION_LABELS.has(requested) || /^[a-zà-ÿ]/.test(requestedName.trim())
+    || `${p.role} ${p.occupation ?? ''}`.toLowerCase().includes(requested);
+  if (!isLabel && first(p.name) !== first(requestedName)) {
     reasons.push(`name "${p.name}" does not match the requested person "${requestedName}"`);
   }
   if (existing.some((c) => c.name.toLowerCase() === p.name.trim().toLowerCase())) {
