@@ -7,7 +7,7 @@ import {
 import type {
   Character, Game, GameEvent, Interaction, Offer, Relationship, Scene, TranscriptLine, TurnResponse, WebDocument,
 } from '../domain/types.ts';
-import type { LLMProvider, LLMTask } from '../llm/provider.ts';
+import { LLMError, type LLMProvider, type LLMTask } from '../llm/provider.ts';
 import {
   perspectiveTrace, renderNpcBriefing, renderPlayerBriefing, retrieveNpcPerspective, retrievePlayerPerspective,
   type NpcContextInput, type NpcPerspective, type PendingCharacter,
@@ -695,8 +695,16 @@ export class Engine {
       gameTime: plan.newGameTime, scene: plan.scene, player, people: known.filter((c) => !c.isPlayer), recent, notes,
       justNow: [interp.narration, ...economy.results].filter(Boolean).join(' '), playerState: this.pack.briefing.player(economy),
     });
-    const beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx), user, 'scene_beat', SceneBeatSchema, SceneBeatSchema,
-      (b) => beatProblems(b, { characters: known, playerId: player.id, conversationOpen }));
+    // A beat is extra: if it can't be made valid (or the call fails), the player's turn goes ahead without it.
+    let beat: SceneBeat;
+    try {
+      beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx), user, 'scene_beat', SceneBeatSchema, SceneBeatSchema,
+        (b) => beatProblems(b, { characters: known, playerId: player.id, conversationOpen }));
+    } catch (e) {
+      if (!(e instanceof TurnFailure) && !(e instanceof LLMError)) throw e;
+      trace.beatFailed = (e as Error).message;
+      return null;
+    }
     const now = this.now();
     const at = plan.newGameTime;
     let newcomer: Character | undefined;
@@ -712,7 +720,7 @@ export class Engine {
         source: 'backstory', sourceEventId: null, createdAt: now, updatedAt: now } });
     }
     const idOf = (n: string) => (newcomer && newcomer.name.toLowerCase() === n.toLowerCase() ? newcomer.id : known.find((c) => c.name.toLowerCase() === n.toLowerCase())!.id);
-    const involved = [...beat.involves.map(idOf), ...(newcomer ? [newcomer.id] : [])];
+    const involved = [...new Set([...beat.involves.map(idOf), ...(newcomer ? [newcomer.id] : [])])];
     const ev = (e: Omit<GameEvent, 'id' | 'gameId' | 'turnId' | 'createdAt'>) => plan.events.push({ id: newId('evt'), gameId: game.id, turnId: trace.turnId, createdAt: now, ...e });
     ev({ interactionId: null, gameTime: at, type: 'scene_beat', summary: `${beat.title}: ${beat.perceived}`, transcript: [], importance: 3, location: plan.scene.location,
       participants: involved.map((id) => ({ characterId: id, role: 'actor' as const })),

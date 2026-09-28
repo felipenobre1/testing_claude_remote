@@ -88,7 +88,19 @@ export function beatUserPrompt(opts: {
   ].join('\n');
 }
 
+/**
+ * Fixes harmless slips in place before checking: the new person listed in involves too, exact-name casing,
+ * duplicates, and a new conversation while one is already open (it becomes an interruption instead).
+ */
+export function normalizeBeat(b: SceneBeat, ctx: { characters: Character[]; conversationOpen: boolean }): void {
+  const byName = (n: string) => ctx.characters.find((c) => c.name.toLowerCase() === n.trim().toLowerCase());
+  const newName = b.newPerson?.name.trim().toLowerCase();
+  b.involves = [...new Set(b.involves.filter((n) => n.trim().toLowerCase() !== newName).map((n) => byName(n)?.name ?? n.trim()))];
+  if (b.opensConversation && ctx.conversationOpen) b.opensConversation = null;
+}
+
 export function beatProblems(b: SceneBeat, ctx: { characters: Character[]; playerId: string; conversationOpen: boolean }): string[] {
+  normalizeBeat(b, ctx);
   const problems: string[] = [];
   const byName = (n: string) => ctx.characters.find((c) => c.name.toLowerCase() === n.trim().toLowerCase());
   for (const n of b.involves) {
@@ -102,7 +114,6 @@ export function beatProblems(b: SceneBeat, ctx: { characters: Character[]; playe
     const n = b.opensConversation.name.toLowerCase();
     const ok = (b.newPerson && b.newPerson.name.toLowerCase() === n) || b.involves.some((x) => x.toLowerCase() === n);
     if (!ok) problems.push('opensConversation: the speaker must be in involves or be the newPerson');
-    if (ctx.conversationOpen) problems.push('opensConversation: the player is already in a conversation — make it an interruption without a new conversation (opensConversation null)');
   }
   return problems;
 }

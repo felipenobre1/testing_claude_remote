@@ -202,3 +202,37 @@ test('playing in another language: everything the player reads is written in it;
   en.store.close();
   store.close();
 });
+
+test('a scene beat never blocks the turn: harmless slips are fixed, a hopeless beat is skipped', async () => {
+  const s = start({ beats: true });
+  const stranger = {
+    name: 'Dema Rusk', age: 40, gender: 'female', role: 'caravan master', occupation: 'caravan master', background: 'Runs salt caravans into the deep desert for twenty years.',
+    personality: 'Blunt, fair, counts every drop of water twice.', traits: ['blunt', 'fair'], values: ['reliability'], goals: ['Hire blades before the storm season'],
+    fears: ['Losing a caravan'], location: 'Ashkar', relationshipToPlayer: 'Has never met Rhen; noticed his knife.',
+  };
+  // The newcomer also listed in involves (the slip from the playtest), plus casing: accepted as-is.
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 20, narration: '' }), interp({ intents: ['general_action'], minutesElapsed: 20, narration: '' }))
+    .enqueue('scene_beat', { kind: 'encounter', title: 'An early hire', perceived: 'A woman with a ledger is looking over the men at the gate.', involves: ['Dema Rusk', 'oda venn'],
+      newPerson: stranger, opensConversation: { name: 'Dema Rusk', channel: 'in_person', openingLine: 'You. Can you use that knife?' }, choice: 'Answer her, or keep your head down.' });
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I wait at the gate' });
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I keep waiting' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.equal(r.beat, 'An early hire');
+  assert.equal(s.llm.callsFor('scene_beat').length, 1); // no retry needed
+  assert.ok(s.char('Dema Rusk'));
+  const beatEvent = s.store.listEvents(s.game.id).find((e) => e.type === 'scene_beat')!;
+  assert.deepEqual(beatEvent.participants.map((p) => p.characterId).sort(), [s.char('Dema Rusk').id, s.char('Oda Venn').id].sort());
+
+  // Two unusable proposals: the player's turn still commits, just without a beat.
+  const t = start({ beats: true });
+  const bad = { kind: 'encounter', title: 'Ghost', perceived: 'Someone who does not exist waves at you.', involves: ['Nobody Real'], newPerson: null, opensConversation: null, choice: 'Wave back?' };
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 20, narration: '' }), interp({ intents: ['general_action'], minutesElapsed: 20, narration: 'You wait.' }))
+    .enqueue('scene_beat', bad, bad);
+  await t.engine.takeTurn({ gameId: t.game.id, input: 'I wait' });
+  const r2 = await t.engine.takeTurn({ gameId: t.game.id, input: 'I wait more' });
+  assert.equal(r2.status, 'committed', r2.error ?? '');
+  assert.equal(r2.beat, undefined);
+  assert.match(String((t.store.lastTurn(t.game.id)!.trace as Trace).beatFailed), /"Nobody Real" is not an existing character/);
+  s.store.close();
+  t.store.close();
+});

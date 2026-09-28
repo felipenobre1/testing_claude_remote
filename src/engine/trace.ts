@@ -38,6 +38,7 @@ export interface Trace {
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
   beat?: unknown; // the scene beat that happened this turn (see engine/story.ts)
+  beatFailed?: string; // the scene beat was rejected twice or its call failed; the turn went ahead without it
   narratorFailed?: string; // the narrator's output was rejected twice; the concise text was used
   retrieval?: ReturnType<typeof perspectiveTrace> & { economyIds?: string[] };
   documents?: { id: string; url: string; finalUrl: string; status: string; title: string | null; chars: number; error: string | null }[];
