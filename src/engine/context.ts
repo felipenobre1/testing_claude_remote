@@ -237,6 +237,8 @@ export interface PlayerPerspective {
   interaction: Interaction | null;
   conversation: TranscriptLine[];
   news: GameEvent[]; // recent messages and world events the player actually observed
+  notes: Knowledge[]; // what the player character has found out (research notes, contacts)
+  activity: GameEvent[]; // the player's own recent doings, for continuity
 }
 
 export function retrievePlayerPerspective(store: Store, gameId: string): PlayerPerspective {
@@ -256,6 +258,8 @@ export function retrievePlayerPerspective(store: Store, gameId: string): PlayerP
     interaction,
     conversation,
     news: store.listEventsObservedBy(player.id).filter((e) => ['message', 'thread_resolved', 'thread_started', 'decision', 'promise_overdue'].includes(e.type)).slice(-6),
+    notes: store.listKnowledgeOf(player.id).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(-12),
+    activity: store.listEventsObservedBy(player.id).filter((e) => !['conversation_turn', 'conversation_started', 'conversation_ended'].includes(e.type)).slice(-5),
   };
 }
 
@@ -267,6 +271,8 @@ export function renderPlayerBriefing(p: PlayerPerspective, input: string, econom
     `${p.player.name.toUpperCase()}'S SITUATION: ${p.facts.map((f) => `${f.predicate}=${f.value}`).join('; ')}`,
     `RESOURCES, OFFERS AND PROMISES:\n${economy || '(none)'}`,
     `RECENT MESSAGES AND NEWS:\n${p.news.map((e) => `[${e.gameTime}] ${e.summary}`).join('\n') || '(none)'}`,
+    `${p.player.name.toUpperCase()}'S NOTES AND CONTACTS (what they have found out; may be incomplete):\n${p.notes.map((k) => `- ${k.topic}: ${k.belief}`).join('\n') || '(none)'}`,
+    `RECENT ACTIVITY:\n${p.activity.map((e) => `[${e.gameTime}] ${e.summary}`).join('\n') || '(none)'}`,
     `TIME: ${formatGameTime(p.gameTime)} (${world})`,
     `LOCATION: ${p.scene.location}. ${p.scene.description}`,
     `KNOWN CHARACTERS: ${p.knownCharacters.map((c) => `${c.name} (${c.role})`).join('; ') || '(none yet)'}`,

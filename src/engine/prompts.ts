@@ -34,6 +34,7 @@ Split the input into what is observable and what is private:
 - minutesElapsed: realistic minutes for ${playerName}'s own actions this turn (0 for just talking). Time is a real resource: buying a domain ≈ 15, a landing page ≈ 240–600, a working prototype ≈ days (e.g. 2880), "I wait until Monday" = the real gap. Max 10080 (one week) per turn.
 - actions: ONLY things with deterministic consequences (resources, offers, promises, world-specific actions) that ${playerName} actually does THIS turn (not plans, not hypotheticals, not things said to be done in the past). Use [] for everything else.
   - pay: paying the outside world (e.g. a service or a purchase). fromEntityName = something ${playerName} controls that pays, else null. recurringMonthly for subscriptions. Amounts in ${pack.currency.code}. Use the amount from KNOWN PRICES when the item is listed (description = that item's name); otherwise a realistic price for this world — it will be remembered. Small everyday spending is already covered by monthly living costs: don't create pay actions for a coffee unless it matters.
+  - seek: ${playerName} tries to find a way to reach a specific person or organisation (someone inside an organisation, the right official, a person who could help). target = who/what; approach = how (LinkedIn, the website, asking a friend…); hours = realistic effort. ifPerson = a plausible person who could be found this way (an invented ordinary person — never a real public figure; name, role, channel), or null if this approach can't yield a name; ifChannel = the general way in that exists (e.g. "the contact form on their website"), or null. The game decides what is actually found — never narrate the outcome.
   - research: ${playerName} spends time finding things out (reading, searching, asking around online). topic + 1–5 concrete findings a real person could plausibly find in that time (for real places: real, verifiable facts; hedge anything uncertain). Findings are ${playerName}'s notes, not guaranteed truth. Set minutesElapsed realistically.
   - give_money: sending money to a known character.
   - make_offer: a concrete offer ${playerName} makes now to the person they are talking to. kind = one of the offer kinds below; subject/label as described there; terms = [{ key, value }] using only the listed term keys and only values the player actually stated; description = the pitch in one sentence. Talking about an idea is not an offer.
@@ -47,6 +48,7 @@ ${pack.prompts.interpretActions}
 - Keep URLs and links exactly as written inside spokenText.
 - UPCOMING events in the briefing are real opportunities. Going to one means moving there (newLocation, a scene description of the event) at its time (minutesElapsed until it starts); people ${playerName} meets there are new people unless known. An event that is not listed can still exist if it is plausible, but nothing is guaranteed.
 - If ${playerName} contacts someone without saying what yet ("I call Marco to tell him about it"), just start the conversation (spokenText null). Never ask the player what they want to say.
+- suggestions: 2–3 concrete next moves ${playerName} could make now, as short imperative phrases (max ~12 words each), grounded ONLY in the briefing: upcoming events, known people, notes and contacts, the product's problems, money and time. Mix kinds (someone to contact, something to do, somewhere to go or time to let pass). Ideas, never outcomes or promises. [] when clarifying.
 - clarificationQuestion: null in almost every case. Only ask when ambiguity would change important persistent state (for example two known people could be meant) and there is no safe reasonable interpretation. Prefer a conservative reasonable interpretation.
 
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;
@@ -103,7 +105,7 @@ OUTPUT (JSON)
 export function generateSystemPrompt(world: WorldContext): string {
   return `You create a new fictional person for a persistent living world: ${world.line}.${backgroundBlock(world.background)}
 The person must be an ordinary, plausible individual — not a caricature, not a real public figure, not suspiciously convenient for the player.
-Use exactly the requested first name (add a plausible surname). Fit the stated relationship to the player.
+Use exactly the requested name (if only a first name is given, add a plausible surname). Fit the stated relationship to the player.
 Do NOT invent specific shared scenes or episodes with the player, secrets about the player, or anything about the player beyond the public profile given.
 relationshipToPlayer: how THIS person sees the player, in general terms from their own point of view (how they know each other, how close they are, what they think of them). No specific episodes.
 location: where they live (${world.homes}). Return JSON only.`;

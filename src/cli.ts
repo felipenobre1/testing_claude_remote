@@ -28,7 +28,7 @@ Options: --db <path> (default data/startup.db or $STARTUP_DB), --debug (print th
 Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
 While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
-In game: type what you do. Commands: /status  /debug  /inspect <what>  /quit`;
+In game: type what you do. Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit`;
 
 function parseArgs(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
@@ -145,6 +145,7 @@ async function design(reader: Reader, creation: WorldCreation, draftId: string, 
 
 async function play(reader: Reader, engine: Engine, gameId: string, debug: boolean, intro: string) {
   const store = engine.store;
+  let hints = true;
   console.log(`\n${intro}\n\n(game ${gameId} — /quit to leave; everything is saved after each turn)\n\n${formatStatusLine(store, gameId)}\n`);
   {
     for (;;) {
@@ -154,6 +155,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       if (!line) continue;
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
+      if (line === '/hints') { hints = !hints; console.log(`next-move ideas ${hints ? 'on' : 'off'}`); continue; }
       if (line === '/status') { console.log(formatStatus(store, gameId)); continue; }
       if (line.startsWith('/inspect')) {
         const parts = line.split(/\s+/).slice(1);
@@ -161,7 +163,8 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
         continue;
       }
       const r = await working('the world is moving', engine.takeTurn({ gameId, input: line }));
-      console.log(`\n${r.text}\n\n${formatStatusLine(store, gameId)}\n`);
+      const ideas = hints && r.suggestions?.length ? `\n\n💡 Ideas: ${r.suggestions.join(' · ')}` : '';
+      console.log(`\n${r.text}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
     }

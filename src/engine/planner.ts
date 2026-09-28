@@ -289,6 +289,32 @@ export class WorldPlanner {
         this.resolveObligation(o);
         return null;
       }
+      case 'seek': {
+        // Looking for a way to reach someone. The model proposes what could be found; the engine decides
+        // whether it is found — more time spent, better odds. What is found becomes the player's contact.
+        const act = a as Extract<PlayerAction, { action: 'seek' }>;
+        if (!(act.hours > 0 && act.hours <= 40)) return 'seek: hours must be between 0 and 40';
+        const roll = this.random(`seek:${priceKey(act.target)}`);
+        const pPerson = act.ifPerson ? Math.min(0.7, 0.2 + 0.1 * act.hours) : 0;
+        const pChannel = Math.min(0.95, pPerson + 0.35 + 0.05 * act.hours);
+        const note = (topic: string, belief: string) => this.ops.push({ op: 'upsert_knowledge', knowledge: {
+          id: newId('know'), gameId: this.ctx.gameId, characterId: me, topic: topic.slice(0, 120), belief, confidence: 0.8, aboutCharacterId: null, factId: null,
+          source: 'seek', sourceEventId: null, gameTime: this.ctx.gameTime, createdAt: this.ctx.now, updatedAt: this.ctx.now } });
+        if (roll < pPerson && act.ifPerson) {
+          const x = act.ifPerson;
+          note(`contact: ${x.name}`, `${x.role} — reachable via ${x.channel} (found by ${act.approach}); has never heard of ${player.name}`);
+          this.event('discovery', `${player.name} found a contact: ${x.name}, ${x.role} (${x.channel}).`, [me], [{ characterId: me, role: 'actor' }], 2);
+          this.results.push(`🔎 Found someone: ${x.name} — ${x.role} · reachable via ${x.channel}`);
+        } else if (roll < pChannel && act.ifChannel) {
+          note(`contact: ${act.target}`, `no named person yet; a way in: ${act.ifChannel} (found by ${act.approach})`);
+          this.event('discovery', `${player.name} found a way to reach ${act.target}: ${act.ifChannel}.`, [me], [{ characterId: me, role: 'actor' }], 2);
+          this.results.push(`🔎 No name yet, but a way in to ${act.target}: ${act.ifChannel}`);
+        } else {
+          this.event('discovery', `${player.name} looked for a way to reach ${act.target} (${act.approach}) and found nothing useful.`, [me], [{ characterId: me, role: 'actor' }], 1);
+          this.results.push(`🔎 Nothing useful yet on ${act.target} via ${act.approach}. Another approach (or more time) might work.`);
+        }
+        return null;
+      }
       case 'research': {
         // What the player character learned. Beliefs, not world truth: research can be incomplete or wrong.
         const act = a as Extract<PlayerAction, { action: 'research' }>;

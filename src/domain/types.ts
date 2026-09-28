@@ -323,6 +323,8 @@ export interface TurnResponse {
   error: string | null;
   results: string[]; // deterministic outcomes: payments, company changes, offers, promises, time effects
   text: string; // fully composed player-facing text
+  /** Ideas for what the player could do next (grounded in their situation; never outcomes). */
+  suggestions?: string[];
   replayed?: boolean;
 }
 

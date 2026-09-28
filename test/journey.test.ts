@@ -215,3 +215,24 @@ test('deleting a game removes every row that belongs to it and nothing else; del
   assert.ok(store.getGame(again.game.id));
   store.close();
 });
+
+test('seeking a contact: the engine decides what is found (more time, better odds); contacts become notes the next turn sees', async () => {
+  const seek = (hours: number) => ({ action: 'seek', target: 'someone at FEduF', approach: 'LinkedIn and their website', hours,
+    ifPerson: { name: 'Chiara Rinaldi', role: 'school programmes coordinator at FEduF', channel: 'LinkedIn message' }, ifChannel: 'the contact form on feduf.it' });
+  // Roll 0.5: 4 hours gives a named person (p = 0.6); 1 hour only a general channel (person p = 0.3, channel p = 0.7).
+  const lucky = start();
+  const r = await lucky.turn('I look for someone at FEduF', { intents: ['general_action'], minutesElapsed: 240, narration: 'You dig through LinkedIn.',
+    actions: [seek(4)], suggestions: ['Message Chiara on LinkedIn', 'Go to Wednesday\'s pitching event'] });
+  assert.match(r.text, /🔎 Found someone: Chiara Rinaldi — school programmes coordinator at FEduF · reachable via LinkedIn message/);
+  assert.deepEqual(r.suggestions, ['Message Chiara on LinkedIn', 'Go to Wednesday\'s pitching event']);
+  await lucky.turn('what now', { intents: ['general_action'], minutesElapsed: 5, narration: '' });
+  const brief = lastPrompt(lucky.llm, 'interpret');
+  assert.match(brief, /NOTES AND CONTACTS[^\n]*\n- contact: Chiara Rinaldi: school programmes coordinator at FEduF — reachable via LinkedIn message/);
+  assert.match(brief, /RECENT ACTIVITY:\n[\s\S]*found a contact: Chiara Rinaldi/);
+  lucky.store.close();
+
+  const quick = start();
+  const r2 = await quick.turn('I quickly google FEduF', { intents: ['general_action'], minutesElapsed: 60, narration: '', actions: [seek(1)] });
+  assert.match(r2.text, /🔎 No name yet, but a way in to someone at FEduF: the contact form on feduf\.it/);
+  quick.store.close();
+});

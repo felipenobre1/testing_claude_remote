@@ -429,6 +429,7 @@ export class Engine {
       conversationEnded,
       results,
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
+      suggestions: interp.suggestions ?? [],
     });
     this.commit(game, player, plan, economy, trace, response, input);
     return response;

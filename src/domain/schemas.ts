@@ -23,6 +23,11 @@ export const CORE_ACTIONS = [
   z.strictObject({ action: z.literal('respond_to_offer'), offerId: z.string(), accept: z.boolean() }),
   z.strictObject({ action: z.literal('make_promise'), toCharacterName: z.string(), description: z.string().min(3).max(300), amount: z.number().nullable(), dueInDays: z.number().nullable() }),
   z.strictObject({ action: z.literal('fulfill_promise'), promiseId: z.string() }),
+  z.strictObject({
+    action: z.literal('seek'), target: z.string().min(2).max(160), approach: z.string().min(2).max(200), hours: z.number(),
+    ifPerson: z.strictObject({ name: z.string().min(2).max(80), role: z.string().min(2).max(120), channel: z.string().min(2).max(120) }).nullable(),
+    ifChannel: z.string().max(160).nullable(),
+  }),
   z.strictObject({ action: z.literal('research'), topic: z.string().min(2).max(120), findings: z.array(z.string().min(3).max(300)).min(1).max(5) }),
 ] as const;
 type CoreAction = z.infer<(typeof CORE_ACTIONS)[number]>;
@@ -43,6 +48,7 @@ const interpretFields = {
   minutesElapsed: z.number().int().min(0).max(10080), // up to a week of focused work / waiting
   narration: z.string().max(1500),
   clarificationQuestion: z.string().max(400).nullable(),
+  suggestions: z.array(z.string().min(3).max(160)).max(3),
 };
 
 /** Call 1 — player perspective. The action union = core actions + the pack's actions. */
