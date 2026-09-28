@@ -63,7 +63,7 @@ test('fights are decided by the engine: skill, gear, a bounded roll; a killed pe
   s.store.close();
 });
 
-test('losing hurts, and the player is never killed by a single roll', async () => {
+test('losing hurts; a fight nobody means to be lethal never kills', async () => {
   const s = start({ roll: 0 }); // roll −5 and minimum damage rolls
   const r = await s.turn('I pick a fight with the house guards', { intents: ['general_action'], minutesElapsed: 2, narration: '',
     actions: [fight('three house guards in lamellar armour', { threat: 5, intent: 'drive_off' })] });
@@ -320,4 +320,56 @@ test('playtest export: what the player typed and saw, what the engine decided, r
   assert.doesNotMatch(md, /\*\*Prompt:\*\*/); // prompts only with --full
   assert.match(exportPlaytest(s.store, s.game.id, { full: true }), /\*\*Prompt:\*\*/);
   s.store.close();
+});
+
+test('people attack the player: a mortal insult gets a knife, a lethal fight can kill, and a dead player\'s story is over', async () => {
+  const s = start({ roll: 0 });
+  const insult = () => interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'I slept with your wife. She says you are a coward.' });
+  s.llm.enqueue('interpret', insult())
+    .enqueue('npc_turn', npc({ dialogue: 'I will gut you.', perceivable: 'His training sword clatters down; a real blade comes out.', attack: { intent: 'kill', threat: 4, how: 'a curved sword, straight for the belly' } }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I tell Kesh I slept with his wife' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED|YOUR CHARACTER/); // briefing sanity
+  assert.match(s.llm.callsFor('npc_turn')[0]!.system, /attack: if your character would physically attack the other person NOW/);
+  assert.match(r.text, /⚔ Kesh Adar attacks you to kill: crushing defeat\. Kesh Adar beats you down completely — you are at their mercy\. You took a grievous wound to the left arm \(−60; 40\/100\)/);
+  assert.equal(r.gameOver, undefined);
+
+  // He finishes it.
+  s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Kesh Adar', relationHint: null }, spokenText: 'Is that all?' }))
+    .enqueue('npc_turn', npc({ dialogue: 'No.', attack: { intent: 'kill', threat: 4, how: 'the point, through the ribs' } }));
+  const r2 = await s.engine.takeTurn({ gameId: s.game.id, input: 'I mock him' });
+  assert.match(r2.text, /⚔ Kesh Adar attacks you to kill: Kesh Adar kills you\. You took .*\. ☠ Rhen is dead\./);
+  assert.equal(r2.gameOver, true);
+  assert.deepEqual(r2.suggestions, []);
+  assert.equal(s.store.getCharacter(s.player.id)!.status, 'dead');
+  const after = await s.engine.takeTurn({ gameId: s.game.id, input: 'I get up' });
+  assert.match(after.text, /^☠ Rhen is dead\. This story is over\./);
+  s.store.close();
+});
+
+test('someone who only means to humiliate can beat you bloody but not kill you; an ambush comes as a scene beat', async () => {
+  const s = start({ roll: 0 });
+  for (let i = 0; i < 3; i++) {
+    s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'Coward.' }))
+      .enqueue('npc_turn', npc({ dialogue: 'On your knees.', attack: { intent: 'humiliate', threat: 4, how: 'the flat of his blade' } }));
+    await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
+  }
+  assert.equal(s.me().health, 1);
+  assert.equal(s.store.getCharacter(s.player.id)!.status, 'alive');
+  s.store.close();
+
+  const t = start({ roll: 1, beats: true });
+  const thug = {
+    name: 'Vorn', age: 30, gender: 'male', role: 'debt-enforcer for hire', occupation: 'enforcer', background: 'Breaks bones for whoever pays.',
+    personality: 'Bored, patient and utterly brutal.', traits: ['brutal', 'patient'], values: ['coin'], goals: ['Get paid'], fears: ['Being cheated'], location: 'Ashkar',
+    relationshipToPlayer: 'Paid to hurt him. Nothing personal.',
+  };
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 20, narration: '' }), interp({ intents: ['general_action'], minutesElapsed: 20, narration: '' }))
+    .enqueue('scene_beat', { kind: 'threat', title: 'An enforcer in the alley', perceived: 'A big man steps out of a doorway with a club.', involves: [], newPerson: thug,
+      opensConversation: null, choice: 'Fight or run.', offer: null, attack: { byName: 'Vorn', intent: 'hurt', threat: 3, how: 'a club at the knees' } });
+  await t.engine.takeTurn({ gameId: t.game.id, input: 'I walk home' });
+  const r = await t.engine.takeTurn({ gameId: t.game.id, input: 'I keep walking' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(r.text, /⚔ Vorn attacks you: decisive victory\. Vorn is beaten back\./);
+  t.store.close();
 });

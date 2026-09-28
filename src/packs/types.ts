@@ -66,6 +66,8 @@ export interface GamePack {
     /** Creates the pack's starting state from the approved seed, inside the creation transaction. */
     seed?(ctx: PackSeedContext): void;
   };
+  /** Someone attacks the player (from a conversation or a scene beat). The pack resolves it; without this hook, attacks are words only. */
+  npcAttack?(api: WorldPlanner, attackerId: string, attack: NpcAttack): void;
   /** Once per game week while time passes (Monday 08:00): pack dynamics; returns lines for the weekly report. */
   weekly?(api: WorldPlanner, weekStart: string, weekEnd: string): string[];
   offerKinds: OfferKindDef[];
@@ -92,6 +94,9 @@ export interface GamePack {
   /** Name of a pack entity from committed state (for debug views). */
   entityLabel?(store: Store, id: string): string;
 }
+
+/** A character's decision to attack the player. intent: kill (the player can die), hurt, humiliate, drive_off. threat: 1–5, how dangerous the attacker is. */
+export interface NpcAttack { intent: 'kill' | 'hurt' | 'humiliate' | 'drive_off'; threat: number; how: string }
 
 export interface PackSeedContext {
   store: Store;

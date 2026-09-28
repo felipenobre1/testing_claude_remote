@@ -34,6 +34,8 @@ export const SceneBeatSchema = z.object({
   }).nullable(),
   /** The decision this puts in front of the player, in one line. */
   choice: z.string().min(5).max(300),
+  /** Someone attacks the player as part of this moment (an ambush, a hired blade, a jealous husband). The game decides how it goes. */
+  attack: z.object({ byName: z.string().max(80), intent: z.enum(['kill', 'hurt', 'humiliate', 'drive_off']), threat: z.number().int().min(1).max(5), how: z.string().min(3).max(200) }).nullable(),
   /** A concrete proposal the speaker makes to the player (becomes a real offer the player can accept or refuse). */
   offer: z.object({
     kind: z.string().max(40), label: z.string().max(80).nullable(), terms: z.array(z.object({ key: z.string().max(40), value: z.number() })).max(6),
@@ -42,7 +44,7 @@ export const SceneBeatSchema = z.object({
 });
 export type SceneBeat = z.infer<typeof SceneBeatSchema>;
 /** Lenient parsing: a beat without an offer field has no offer. */
-export const SceneBeatParseSchema = SceneBeatSchema.extend({ offer: SceneBeatSchema.shape.offer.default(null) });
+export const SceneBeatParseSchema = SceneBeatSchema.extend({ offer: SceneBeatSchema.shape.offer.default(null), attack: SceneBeatSchema.shape.attack.default(null) });
 
 const THRESHOLD: Record<WorldSeed['style']['pace'], number> = { quiet: Infinity, steady: 4, eventful: 2 };
 
@@ -75,6 +77,7 @@ Propose ONE thing that happens now and puts a real decision in front of the play
 - involves: exact names of existing living characters involved (never the player). newPerson: a new ordinary person if the moment needs one (full profile; never a real public figure); otherwise null.
 - opensConversation: if someone addresses the player directly, their name (existing or the newPerson), the channel, and their first words. null otherwise.
 - choice: the decision this forces, in one line (e.g. "Take the offered blade and the debt that comes with it, or walk away").
+- attack: when the moment is violence against the player (an ambush, someone they wronged, a robbery, an assassin), who attacks (existing name or the newPerson), intent (kill / hurt / humiliate / drive_off), threat 1–5 (how dangerous the attacker is) and how. The game decides how it goes; perceived shows the attack beginning, never its outcome. Otherwise null. The player is not protected by the story: enemies they made will come for them.
 - offer: when the speaker proposes a concrete deal to the player (pay for a job, a sparring bout for coins, a blade on credit), state it so the player can accept or refuse it: kind and terms from these offer kinds, a short label and description; otherwise null.
 ${offerKinds}
 - Respect the bible: pace, tone, realism, player significance. ${contentRule(world.violence, 'narrator')}${languageRule(world.language, 'title, perceived, choice and opensConversation.openingLine')}
@@ -125,6 +128,11 @@ export function beatProblems(b: SceneBeat, ctx: { characters: Character[]; playe
     if (!ok) problems.push('opensConversation: the speaker must be in involves or be the newPerson');
   }
   if (b.offer && !b.opensConversation) problems.push('offer: someone must be speaking to the player to make an offer (opensConversation)');
+  if (b.attack) {
+    const n = b.attack.byName.trim().toLowerCase();
+    const ok = (b.newPerson && b.newPerson.name.toLowerCase() === n) || b.involves.some((x) => x.toLowerCase() === n);
+    if (!ok) problems.push('attack: the attacker must be in involves or be the newPerson');
+  }
   return problems;
 }
 

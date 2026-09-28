@@ -39,6 +39,7 @@ export interface Trace {
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
   beat?: unknown; // the scene beat that happened this turn (see engine/story.ts)
+  npcAttack?: unknown; // the attack the NPC launched this turn
   beatFailed?: string;
   beatOfferDropped?: string; // a beat's offer that did not fit the pack's offer kinds // the scene beat was rejected twice or its call failed; the turn went ahead without it
   narratorFailed?: string; // the narrator's output was rejected twice; the concise text was used

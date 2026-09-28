@@ -192,6 +192,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       console.log(`\n${r.status === 'failed' ? t.failed : r.text}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
+      if (r.gameOver) { console.log('☠  THE END.  (npm start -- export keeps the log of this story)\n'); break; }
     }
   }
 }

@@ -204,6 +204,7 @@ export class WorldPlanner {
   setCharacterStatus(characterId: string, status: 'alive' | 'dead' | 'missing') {
     const c = this.ctx.characters.find((x) => x.id === characterId);
     if (c) c.status = status;
+    if (characterId === this.ctx.player.id) this.ctx.player.status = status;
     this.ops.push({ op: 'set_character_status', characterId, status });
   }
   saveDecisionState(characterId: string, domain: string, state: DecisionState) {

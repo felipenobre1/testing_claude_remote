@@ -174,9 +174,13 @@ const npcTurnFields = {
   mentionedCharacterNames: z.array(z.string().max(80)).max(10),
   minutesElapsed: z.number().int().min(0).max(60),
 };
-export const NpcTurnWireSchema = z.object({ ...npcTurnFields, changes: z.array(ChangeOpSchema) });
+/** The NPC physically attacks the player now. The game decides how it goes. */
+export const NpcAttackSchema = z.object({
+  intent: z.enum(['kill', 'hurt', 'humiliate', 'drive_off']), threat: z.number().int().min(1).max(5), how: z.string().min(3).max(200),
+});
+export const NpcTurnWireSchema = z.object({ ...npcTurnFields, attack: NpcAttackSchema.nullable(), changes: z.array(ChangeOpSchema) });
 /** Parsing schema: envelope strictly, changes loosely — each change is validated individually by the validator. */
-export const NpcTurnEnvelopeSchema = z.object({ ...npcTurnFields, changes: z.array(z.unknown()) });
+export const NpcTurnEnvelopeSchema = z.object({ ...npcTurnFields, attack: NpcAttackSchema.nullable().default(null), changes: z.array(z.unknown()) });
 export type NpcTurnEnvelope = z.infer<typeof NpcTurnEnvelopeSchema>;
 
 // ---- Story Director (world-level; sees world truth, proposes; the engine validates) ----

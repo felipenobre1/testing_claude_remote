@@ -30,13 +30,15 @@ function practise(p: Profile, skill: string, points: number): string | null {
   while (s.level < MAX_LEVEL && s.practice >= practiceFor(s.level)) { s.practice -= practiceFor(s.level); s.level++; up = true; }
   return up ? `⬆ ${skill} is now ${s.level}` : null;
 }
-function hurt(api: WorldPlanner, p: Profile, amount: number, label: string): string | null {
+/** Wounds someone. Only a lethal fight (someone means to kill) can bring health to 0 — and at 0 they die. */
+function hurt(api: WorldPlanner, p: Profile, amount: number, label: string, lethal = false): string | null {
   if (amount <= 0) return null;
   const severity: Injury['severity'] = amount >= 35 ? 'critical' : amount >= 18 ? 'serious' : 'light';
   const part = BODY[Math.min(BODY.length - 1, Math.floor(api.random(`${label}:body`) * BODY.length))]!;
   const text = severity === 'critical' ? `a grievous wound to the ${part}` : severity === 'serious' ? `a deep wound to the ${part}` : `a cut to the ${part}`;
-  p.health = Math.max(p.characterId === api.ctx.player.id ? 1 : 0, p.health - amount); // the player is never killed by a single roll
+  p.health = Math.max(lethal ? 0 : 1, p.health - amount);
   p.injuries = [...p.injuries, { text, severity }].slice(-6);
+  if (p.health === 0) api.setCharacterStatus(p.characterId, 'dead');
   return text;
 }
 function condition(p: Profile): string {
@@ -47,6 +49,75 @@ function condition(p: Profile): string {
 function addDeed(p: Profile, deed: string) { p.deeds = [...p.deeds, deed].slice(-4); }
 
 const OUTCOMES = ['decisive', 'win_hurt', 'stalemate', 'lose', 'crushing'] as const;
+type PlayerIntent = 'kill' | 'subdue' | 'drive_off' | 'defend' | 'duel';
+type FoeIntent = 'kill' | 'hurt' | 'humiliate' | 'drive_off';
+
+/**
+ * One fight, whoever started it. Outcome from the player's side: skill + weapon + armour − wounds vs the opponent,
+ * plus a bounded seeded roll. The player can die only if the opponent fights to kill.
+ */
+function resolveFight(api: WorldPlanner, f: {
+  opponent: string; named?: Character; threat: number; playerIntent: PlayerIntent; foeIntent: FoeIntent;
+  weaponName: string | null; witnessed: boolean; aggressor: 'player' | 'npc';
+}): string | null {
+  const me = api.ctx.player.id;
+  const player = profile(api, me);
+  const { named } = f;
+  const foe = named ? profile(api, named.id, { skills: { combat: { level: f.threat, practice: 0 } } }) : null;
+  const weapon = f.weaponName ? st(api).findItem(me, f.weaponName) : f.aggressor === 'npc' ? st(api).best(me, 'weapon') : undefined;
+  if (f.weaponName && !weapon) return `You don't have "${f.weaponName}".`;
+  const armor = st(api).best(me, 'armor');
+  const mine = skillLevel(player, 'combat') + (weapon?.kind === 'weapon' ? 1 + weapon.quality : 0) + (armor ? 0.5 + armor.quality * 0.5 : 0)
+    - (player.health < 25 ? 2 : player.health < 50 ? 1 : 0) - (f.aggressor === 'npc' ? 0.5 : 0); // caught first
+  const theirs = foe ? skillLevel(foe, 'combat') + 1.5 - (foe.health < 40 ? 1 : 0) : f.threat * 1.3;
+  const roll = api.random(`fight:${f.opponent}`) * 10 - 5;
+  const margin = mine - theirs + roll;
+  const outcome: (typeof OUTCOMES)[number] = margin >= 4 ? 'decisive' : margin >= 1 ? 'win_hurt' : margin >= -1.5 ? 'stalemate' : margin >= -5 ? 'lose' : 'crushing';
+  const dmg = (lo: number, hi: number, k: string) => Math.round(lo + api.random(`fight:${f.opponent}:${k}`) * (hi - lo));
+  const lethal = f.foeIntent === 'kill';
+  const taken = { decisive: dmg(0, 6, 'p'), win_hurt: dmg(8, 22, 'p'), stalemate: dmg(8, 20, 'p'), lose: dmg(20, 38, 'p'),
+    crushing: lethal ? dmg(60, 110, 'p') : dmg(40, 70, 'p') }[outcome];
+  const wound = hurt(api, player, taken, `fight:${f.opponent}:p`, lethal);
+  const who = named?.name ?? f.opponent;
+  const playerDied = player.health === 0;
+  const foeLine = (() => {
+    if (playerDied) return `${who} kills you`;
+    if (outcome === 'decisive' || outcome === 'win_hurt') {
+      if (f.playerIntent === 'kill') {
+        if (named) { if (foe) foe.health = 0; api.setCharacterStatus(named.id, 'dead'); }
+        return named ? `${who} is dead` : `${who}: killed`;
+      }
+      if (foe) hurt(api, foe, dmg(15, 35, 'f'), `fight:${f.opponent}:f`);
+      return f.playerIntent === 'subdue' ? `${who} is beaten and at your mercy` : f.playerIntent === 'drive_off' || f.playerIntent === 'defend' ? `${who} is beaten back` : `${who} yields`;
+    }
+    if (outcome === 'stalemate') { if (foe) hurt(api, foe, dmg(8, 20, 'f'), `fight:${f.opponent}:f`); return 'neither of you can finish it; you break apart'; }
+    if (outcome === 'lose') return f.foeIntent === 'humiliate' ? `${who} humiliates you` : `${who} gets the better of you`;
+    return `${who} beats you down completely — you are at their mercy`;
+  })();
+  const label = playerDied ? 'death' : { decisive: 'decisive victory', win_hurt: 'victory, but it cost you', stalemate: 'stalemate', lose: 'defeat', crushing: 'crushing defeat' }[outcome];
+  const lvl = playerDied ? null : practise(player, 'combat', outcome === 'decisive' || outcome === 'win_hurt' ? 2 : 1);
+  let fame = '';
+  if (!playerDied && f.witnessed && (outcome === 'decisive' || outcome === 'win_hurt')) {
+    const gain = f.threat >= 4 || named ? 2 : 1;
+    player.fame += gain;
+    addDeed(player, `${f.playerIntent === 'kill' ? 'killed' : 'beat'} ${who} in front of witnesses`);
+    fame = ` · fame +${gain} (${fameLabel(player.fame)})`;
+  } else if (f.witnessed && (outcome === 'lose' || outcome === 'crushing')) {
+    addDeed(player, playerDied ? `was killed by ${who}` : `was beaten by ${who} in front of witnesses`);
+  }
+  st(api).touch(player, api.ctx.now);
+  if (foe) st(api).touch(foe, api.ctx.now);
+  const head = f.aggressor === 'npc' ? `⚔ ${who} attacks you${lethal ? ' to kill' : ''}` : `⚔ Fight — ${who}`;
+  const line = playerDied
+    ? `${head}: ${who} kills you. You took ${wound}. ☠ ${api.ctx.player.name} is dead.`
+    : `${head}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${lvl ? ` ${lvl}` : ''}${fame}`;
+  api.results.push(line);
+  api.witnessed.push(`${f.aggressor === 'npc' ? `${who} attacked ${api.ctx.player.name} (${f.foeIntent})` : `${api.ctx.player.name} fought ${who} (${f.playerIntent}${weapon ? `, with ${weapon.name}` : ', bare-handed'})`}: ${label}; ${foeLine}${wound ? `; ${api.ctx.player.name} took ${wound}` : ''}.`);
+  const observers = [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])];
+  api.event('fight', `${f.aggressor === 'npc' ? `${who} attacked ${api.ctx.player.name}` : `${api.ctx.player.name} fought ${who}`}: ${label}; ${foeLine}.`, observers,
+    [{ characterId: me, role: 'actor' }, ...(named ? [{ characterId: named.id, role: 'actor' as const }] : [])], playerDied ? 5 : 4);
+  return null;
+}
 
 const actions: PackAction[] = [
   {
@@ -61,57 +132,14 @@ const actions: PackAction[] = [
     }),
     doc: 'fight: the player fights now (attacks, defends, duels). opponent = exact name of a known person or a short description; threat 1 (weak) … 5 (deadly) — honest; intent; weaponName from what they carry, or null for bare hands. The game decides the outcome — never narrate who wins.',
     handle: (api, a) => {
-      const me = api.ctx.player.id;
-      const player = profile(api, me);
       const known = api.findCharacter(String(a.opponent));
-      const named: Character | undefined = known && known.id !== me ? known : undefined;
+      const named: Character | undefined = known && known.id !== api.ctx.player.id ? known : undefined;
       if (named?.status === 'dead') return api.reject(a, `${named.name} is already dead.`), null;
+      const intent = a.intent as PlayerIntent;
       const threat = clamp(Math.round(Number(a.threat)), 1, 5);
-      const foe = named ? profile(api, named.id, { skills: { combat: { level: threat, practice: 0 } } }) : null;
-      const weapon = a.weaponName ? st(api).findItem(me, String(a.weaponName)) : undefined;
-      if (a.weaponName && !weapon) return api.reject(a, `You don't have "${a.weaponName}".`), null;
-      const armor = st(api).best(me, 'armor');
-      const mine = skillLevel(player, 'combat') + (weapon?.kind === 'weapon' ? 1 + weapon.quality : 0) + (armor ? 0.5 + armor.quality * 0.5 : 0)
-        - (player.health < 25 ? 2 : player.health < 50 ? 1 : 0);
-      const theirs = foe ? skillLevel(foe, 'combat') + 1.5 - (foe.health < 40 ? 1 : 0) : threat * 1.3;
-      const roll = api.random(`fight:${a.opponent}`) * 10 - 5;
-      const margin = mine - theirs + roll;
-      const outcome: (typeof OUTCOMES)[number] = margin >= 4 ? 'decisive' : margin >= 1 ? 'win_hurt' : margin >= -1.5 ? 'stalemate' : margin >= -5 ? 'lose' : 'crushing';
-      const dmg = (lo: number, hi: number, k: string) => Math.round(lo + api.random(`fight:${a.opponent}:${k}`) * (hi - lo));
-      const taken = { decisive: dmg(0, 6, 'p'), win_hurt: dmg(8, 22, 'p'), stalemate: dmg(8, 20, 'p'), lose: dmg(20, 38, 'p'), crushing: dmg(40, 70, 'p') }[outcome];
-      const wound = hurt(api, player, taken, `fight:${a.opponent}:p`);
-      const who = named?.name ?? String(a.opponent);
-      const foeLine = (() => {
-        if (outcome === 'decisive' || outcome === 'win_hurt') {
-          if (a.intent === 'kill') {
-            if (named) api.setCharacterStatus(named.id, 'dead');
-            return named ? `${who} is dead` : `${who}: killed`;
-          }
-          if (foe) hurt(api, foe, dmg(15, 35, 'f'), `fight:${a.opponent}:f`);
-          return a.intent === 'subdue' ? `${who} is beaten and at your mercy` : a.intent === 'drive_off' ? `${who} flees` : `${who} yields`;
-        }
-        if (outcome === 'stalemate') { if (foe) hurt(api, foe, dmg(8, 20, 'f'), `fight:${a.opponent}:f`); return `neither of you can finish it; you break apart`; }
-        return outcome === 'lose' ? `${who} gets the better of you` : `${who} beats you down completely — you are at their mercy`;
-      })();
-      const label = { decisive: 'decisive victory', win_hurt: 'victory, but it cost you', stalemate: 'stalemate', lose: 'defeat', crushing: 'crushing defeat' }[outcome];
-      const lvl = practise(player, 'combat', outcome === 'decisive' || outcome === 'win_hurt' ? 2 : 1);
-      let fame = '';
-      if (a.witnessed && (outcome === 'decisive' || outcome === 'win_hurt')) {
-        const gain = threat >= 4 || named ? 2 : 1;
-        player.fame += gain;
-        addDeed(player, `${a.intent === 'kill' ? 'killed' : 'beat'} ${who} in front of witnesses`);
-        fame = ` · fame +${gain} (${fameLabel(player.fame)})`;
-      } else if (a.witnessed && (outcome === 'lose' || outcome === 'crushing')) {
-        addDeed(player, `was beaten by ${who} in front of witnesses`);
-      }
-      st(api).touch(player, api.ctx.now);
-      if (foe) st(api).touch(foe, api.ctx.now);
-      const line = `⚔ Fight — ${who}: ${label}. ${foeLine[0]!.toUpperCase()}${foeLine.slice(1)}.${wound ? ` You took ${wound} (−${taken}; ${player.health}/${player.maxHealth}).` : ' You are unhurt.'}${lvl ? ` ${lvl}` : ''}${fame}`;
-      api.results.push(line);
-      api.witnessed.push(`${api.ctx.player.name} fought ${who} (${a.intent}${weapon ? `, with ${weapon.name}` : ', bare-handed'}): ${label}; ${foeLine}${wound ? `; ${api.ctx.player.name} took ${wound}` : ''}.`);
-      const observers = [me, ...(named ? [named.id] : []), ...(api.ctx.interaction?.participantIds ?? [])];
-      api.event('fight', `${api.ctx.player.name} fought ${who}: ${label}; ${foeLine}.`, observers, [{ characterId: me, role: 'actor' }, ...(named ? [{ characterId: named.id, role: 'actor' as const }] : [])], 4);
-      return null;
+      // Whoever you try to kill fights for their life; a duel with a deadly opponent is to the death.
+      const foeIntent: FoeIntent = intent === 'kill' || (intent === 'duel' && threat >= 4) ? 'kill' : 'hurt';
+      return resolveFight(api, { opponent: String(a.opponent), named, threat, playerIntent: intent, foeIntent, weaponName: (a.weaponName as string | null) ?? null, witnessed: Boolean(a.witnessed), aggressor: 'player' });
     },
   },
   {
@@ -263,6 +291,12 @@ export const adventurePack: GamePack = {
       }
     },
     template: ADVENTURE_WORLD,
+  },
+  npcAttack(api, attackerId, attack) {
+    const named = api.ctx.characters.find((c) => c.id === attackerId);
+    if (!named || named.status === 'dead') return;
+    resolveFight(api, { opponent: named.name, named, threat: clamp(Math.round(attack.threat), 1, 5), playerIntent: 'defend',
+      foeIntent: attack.intent, weaponName: null, witnessed: true, aggressor: 'npc' });
   },
   weekly(api) {
     const p = profile(api, api.ctx.player.id);

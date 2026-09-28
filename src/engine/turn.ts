@@ -199,6 +199,9 @@ export class Engine {
     const world = this.worldOf(game.id);
     const pp = retrievePlayerPerspective(store, game.id);
     const player = pp.player;
+    if (player.status === 'dead') {
+      return this.clarify(trace, game, `☠ ${player.name} is dead. This story is over. (npm start -- export keeps the log; npm start -- new starts another story.)`);
+    }
     trace.scene = pp.scene;
     trace.openInteraction = pp.interaction;
     const everyone = store.listCharacters(game.id);
@@ -439,6 +442,11 @@ export class Engine {
         if (err) economy.results.push(`✗ ${err}`);
       }
     }
+    // Someone who decided to attack the player does: the pack resolves the fight (the player defends).
+    if (npcOut?.attack && target && world.ctx.violence !== 'none' && this.pack.npcAttack) {
+      trace.npcAttack = npcOut.attack;
+      this.pack.npcAttack(economy, target.id, npcOut.attack);
+    }
     const npcResultCount = economy.results.length;
 
     // 6. The world turn: time passes for everyone, not just the player.
@@ -464,7 +472,8 @@ export class Engine {
     const seed = world.seed;
     let beat: SceneBeat | null = null;
     const conversationOpen = Boolean(interaction && !conversationEnded);
-    if (this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed })) {
+    const playerDiedBeforeBeat = economy.ctx.player.status === 'dead';
+    if (!playerDiedBeforeBeat && this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed })) {
       beat = await this.sceneBeat(trace, game, player, everyone, pending, economy, plan, interp, conversationOpen, world);
     }
 
@@ -482,7 +491,7 @@ export class Engine {
         gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
         input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
         facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
-        words, conversationEnded, choice: beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
+        words, conversationEnded, choice: economy.ctx.player.status === 'dead' ? `None — ${player.name} is dead. Write the death; this is the last passage of the story.` : beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
         resultLines: localized(world.ctx.language) ? results : [],
       });
     }
@@ -514,7 +523,8 @@ export class Engine {
       conversationEnded,
       results,
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
-      suggestions: narration?.suggestions.length ? narration.suggestions : (interp.suggestions ?? []),
+      suggestions: economy.ctx.player.status === 'dead' ? [] : narration?.suggestions.length ? narration.suggestions : (interp.suggestions ?? []),
+      ...(economy.ctx.player.status === 'dead' ? { gameOver: true } : {}),
       ...(beat ? { beat: beat.title } : {}),
     });
     this.commit(game, player, plan, economy, trace, response, input);
@@ -743,6 +753,10 @@ export class Engine {
         transcript: [{ speakerId: speaker, speakerName: name, text: beat.opensConversation.openingLine }], importance: 3, location: plan.scene.location,
         participants: [{ characterId: speaker, role: 'actor' }, { characterId: player.id, role: 'addressee' }],
         observers: [player.id, speaker].map((id) => ({ characterId: id, channel })) });
+    }
+    if (beat.attack && world.ctx.violence !== 'none' && this.pack.npcAttack) {
+      if (newcomer && !economy.ctx.characters.some((c) => c.id === newcomer!.id)) economy.ctx.characters.push(newcomer);
+      this.pack.npcAttack(economy, idOf(beat.attack.byName), beat.attack);
     }
     if (beat.offer && beat.opensConversation) {
       // The proposal becomes a real offer the player can accept or refuse.

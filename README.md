@@ -82,7 +82,8 @@ These are generic engine features. Each world sets them at creation (`style.pace
 - **Play in your language.** Set `style.language` at creation: the Copilot records the language you write in, or use `new --quick --lang "Brazilian Portuguese"`. Everything the player reads that a model writes is then in that language: narration, dialogue, scene beats, ideas, notes, messages. Prompts, event logs, traces and the engine's own result lines stay in English.
 - **Next-move ideas** after each turn (`/hints` toggles them). **seek** finds people and ways in, rolled against the time you invest.
 - **Violence per world:** `none`, `non_graphic` or `graphic`. Graphic worlds show fights, wounds and death in full. Sexual content is never produced, and the self-harm check (about the real player, not the character) stays.
-- **Death.** Characters can die (`characters.status`). The dead can't be talked to or fought again and are marked DEAD in every briefing. The player is never killed by a single roll; health floors at 1.
+- **Death, both ways.** Characters can die (`characters.status`). The dead can't be talked to or fought again and are marked DEAD in every briefing. **The player can die too**, if someone fighting to kill brings them to 0 health. The narrator writes the death, the turn is marked `gameOver`, and the story is over. Fights nobody means to be lethal (hurt, humiliate, drive off, subdue) can leave you at 1 health but never kill.
+- **People attack you.** In a conversation, an NPC can decide to attack (`attack`: intent, how dangerous they are, how). Scene beats can be attacks too: an ambush, someone you wronged, a hired blade. The pack resolves the fight with the player defending (`npcAttack`), using the same rules as the player's own fights.
 
 ## Game Pack: Adventure
 

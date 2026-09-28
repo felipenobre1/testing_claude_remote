@@ -34,7 +34,7 @@ export function npc(p: Record<string, unknown> = {}) {
   return {
     expressedDecision: null, counterTerms: null, condition: null,
     dialogue: 'Mm, ok.', perceivable: '', endsConversation: false, eventSummary: 'They chat briefly.', importance: 1,
-    mentionedCharacterNames: [], minutesElapsed: 1, changes: [], ...p,
+    mentionedCharacterNames: [], minutesElapsed: 1, attack: null, changes: [], ...p,
   };
 }
 

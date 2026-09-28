@@ -327,6 +327,8 @@ export interface TurnResponse {
   text: string; // fully composed player-facing text
   /** Ideas for what the player could do next (grounded in their situation; never outcomes). */
   suggestions?: string[];
+  /** The player died this turn: the story is over. */
+  gameOver?: boolean;
   /** Title of the scene beat that came to the player this turn, if any. */
   beat?: string;
   replayed?: boolean;
