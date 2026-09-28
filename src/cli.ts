@@ -1,5 +1,7 @@
 import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { exportPlaytest } from './debug/export.ts';
 import { Store } from './db/store.ts';
 import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatWorld, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
@@ -22,6 +24,7 @@ const USAGE = `Living Story Engine
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
   npm start -- drafts                       list world drafts
+  npm start -- export [gameId] [--full]     write a playtest log to playtests/ (--full adds every prompt and model output)
   npm start -- delete <gameId>              delete one game permanently (asks to confirm; --yes skips)
   npm start -- delete --all                 delete ALL games and world drafts (asks to confirm; --yes skips)
   npm start -- inspect <what> [--game id]   inspect state without playing:
@@ -255,6 +258,13 @@ async function main() {
       }
       if (all) store.deleteAllGames(); else store.deleteGame(target!.id);
       console.log(`Deleted ${what}.`);
+    } else if (cmd === 'export') {
+      const gameId = rest[0] ?? latest();
+      if (!gameId || !store.getGame(gameId)) return console.error('No game to export.');
+      mkdirSync('playtests', { recursive: true });
+      const file = `playtests/${gameId}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.md`;
+      writeFileSync(file, exportPlaytest(store, gameId, { full: Boolean(flags.full) }));
+      console.log(`Wrote ${file}. To share it: git add playtests && git commit -m "playtest" && git push`);
     } else if (cmd === 'drafts') {
       console.log(store.listDrafts().map((d) => `${d.id}  ${d.status}  v${d.version}  ${d.updatedAt}${d.gameId ? `  → ${d.gameId}` : ''}`).join('\n') || '(no drafts)');
     } else if (cmd === 'inspect') {

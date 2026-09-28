@@ -33,6 +33,7 @@ export interface Trace {
     model: string | null;
     meta?: Record<string, unknown>;
     problems: string[]; // parse/validation problems with this attempt
+    ms?: number; // how long the model took
   }[];
   interpretation?: InterpretResult;
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };

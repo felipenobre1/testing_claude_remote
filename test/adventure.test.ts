@@ -304,3 +304,20 @@ test('an offer made in a scene beat is real: the player accepts it (not a new of
   assert.match(s.llm.callsFor('narrate').at(-1)!.user, /THE PLAYER SAID \(do not repeat it back\): "Fechado\."/);
   s.store.close();
 });
+
+test('playtest export: what the player typed and saw, what the engine decided, rejected model output', async () => {
+  const s = start({ roll: 1 });
+  s.llm.enqueue('interpret', 'not json', interp({ intents: ['general_action'], minutesElapsed: 2, narration: 'Steel.', actions: [fight('a drunk dock thug', { threat: 1, intent: 'subdue' })] }));
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I floor the thug' });
+  const { exportPlaytest } = await import('../src/debug/export.ts');
+  const md = exportPlaytest(s.store, s.game.id);
+  assert.match(md, /^# Playtest — Ashkar, the pit-city of Qasr — Rhen/);
+  assert.match(md, /STORY PACE: eventful/);
+  assert.match(md, /\*\*Player:\*\* I floor the thug/);
+  assert.match(md, /⚔ Fight — a drunk dock thug: decisive victory/);
+  assert.match(md, /- model calls: interpret ✗ output was not valid JSON · interpret#2/);
+  assert.match(md, /\| interpret \| 2 \| 1 \|/);
+  assert.doesNotMatch(md, /\*\*Prompt:\*\*/); // prompts only with --full
+  assert.match(exportPlaytest(s.store, s.game.id, { full: true }), /\*\*Prompt:\*\*/);
+  s.store.close();
+});

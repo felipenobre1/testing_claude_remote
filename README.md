@@ -48,6 +48,7 @@ npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
 npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
 npm start -- delete <gameId>  # delete one game for good (asks to confirm)
+npm start -- export [gameId]  # write a playtest log to playtests/ (--full adds every prompt and model output); push it to share it for review
 npm start -- delete --all     # delete every game and world draft (asks to confirm; --yes skips the question)
 npm run smoke                 # live multi-session run incl. a Copilot conversation; skips without key/network
 ```

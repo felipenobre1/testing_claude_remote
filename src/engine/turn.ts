@@ -797,7 +797,9 @@ export class Engine {
         : user;
       const call: Trace['llmCalls'][number] = { task, attempt, system, user: prompt, rawText: null, model: null, problems: [] };
       trace.llmCalls.push(call);
+      const t0 = Date.now();
       const res = await this.llm.complete({ task, system, user: prompt, schemaName, schema: wire });
+      call.ms = Date.now() - t0;
       call.rawText = res.rawText;
       call.model = res.model;
       if (res.meta) call.meta = res.meta;
