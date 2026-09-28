@@ -171,7 +171,7 @@ export class WorldCreation {
       case 'request_finalize':
         return this.finalizeRequest(draft, version, turn.reply, save);
       default:
-        return this.keepStatus(row, changed, (status, sv) => save(status, turn.reply, sv));
+        return this.keepStatus(row, changed, (status, sv) => save(status, status === 'drafting' ? turn.reply + this.readyHint(draft) : turn.reply, sv));
     }
   }
 
@@ -213,6 +213,13 @@ export class WorldCreation {
     const row = this.row(draftId);
     if (row.status === 'finalized' || row.status === 'abandoned') throw new Error(`draft ${draftId} is ${row.status}`);
     return row;
+  }
+
+  /** Once the draft is complete enough to create, say so — the player should never have to guess how to start. */
+  private readyHint(draft: WorldDraft): string {
+    return compileDraft(draft, this.packs, { now: this.now() }).seed
+      ? '\n\n(This is enough to start. Keep refining, or say "let\'s start" — or type /finalize — to see the final summary.)'
+      : '';
   }
 
   private summaryOf(draft: WorldDraft): string | null {

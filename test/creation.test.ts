@@ -271,3 +271,15 @@ test('the Copilot wire schema spells out every nested shape (the model cannot in
   assert.equal(asset.properties.metrics.type, 'array');
   assert.deepEqual(asset.properties.monthlyCosts.items.required, ['label', 'amount']);
 });
+
+test('the Copilot tells the player when the draft is enough to start', async () => {
+  const s = setup();
+  const { draftId } = s.creation.start();
+  s.llm.enqueue('world_copilot', reply({ ...EMPTY_DRAFT, packId: 'open', premise: 'A desert story.' }, 'Tell me more.'));
+  const partial = await s.creation.say(draftId, 'a desert story');
+  assert.equal(partial.text, 'Tell me more.');
+  s.llm.enqueue('world_copilot', reply(DESERT, 'Got it.'));
+  const ready = await s.creation.say(draftId, 'here is everything');
+  assert.match(ready.text, /^Got it\.\n\n\(This is enough to start\. Keep refining, or say "let's start" — or type \/finalize — to see the final summary\.\)$/);
+  s.store.close();
+});
