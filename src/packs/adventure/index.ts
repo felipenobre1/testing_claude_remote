@@ -5,7 +5,7 @@ import { newId } from '../../engine/util.ts';
 import type { GamePack, PackAction } from '../types.ts';
 import { ADVENTURE_WORLD } from './world.ts';
 import {
-  ADVENTURE_MIGRATIONS, AdventureState, advRepo, fameLabel, MAX_LEVEL, practiceFor, SKILLS, type Injury, type Item, type Profile,
+  ADVENTURE_MIGRATIONS, AdventureState, advRepo, fameLabel, fameLabelIn, MAX_LEVEL, practiceFor, SKILLS, type Injury, type Item, type Profile,
 } from './state.ts';
 
 // ============================================================================
@@ -305,10 +305,10 @@ export const adventurePack: GamePack = {
         ...(p.injuries.length ? [`${api.ctx.player.name} visibly carries: ${p.injuries.map((i) => i.text).join(', ')}`] : [])];
     },
   },
-  statusParts(store, _gameId, playerId) {
+  statusParts(store, _gameId, playerId, lang = 'en') {
     const p = advRepo.profile(store, playerId);
     if (!p) return [];
-    return [`❤ ${p.health}/${p.maxHealth}`, `⚔ combat ${p.skills.combat?.level ?? 0}`, `★ ${fameLabel(p.fame)}`];
+    return [`❤ ${p.health}/${p.maxHealth}`, `⚔ ${lang === 'pt' ? 'combate' : 'combat'} ${p.skills.combat?.level ?? 0}`, `★ ${fameLabelIn(p.fame, lang)}`];
   },
   prompts: {
     interpretActions: [

@@ -80,7 +80,8 @@ export interface GamePack {
   createTurnState(store: Store, gameId: string): PackTurnState;
   /** Extra briefing lines: what the player / this NPC can see of pack state. Perspective rules apply. */
   briefing: { player(api: WorldPlanner): string[]; npc(api: WorldPlanner, npcId: string): string[] };
-  statusParts(store: Store, gameId: string, playerId: string): string[];
+  /** Short status-bar parts; `lang` is the interface language ('en' | 'pt'). */
+  statusParts(store: Store, gameId: string, playerId: string, lang?: 'en' | 'pt'): string[];
   prompts: {
     /** How to express this pack's actions (appended to the interpreter's action docs). */
     interpretActions: string;

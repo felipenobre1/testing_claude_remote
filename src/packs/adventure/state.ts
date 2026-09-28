@@ -148,3 +148,6 @@ export const FAME_TIERS: [number, string][] = [
   [10, 'famous across the land'], [15, 'a legend across the known worlds'],
 ];
 export const fameLabel = (fame: number) => [...FAME_TIERS].reverse().find(([min]) => fame >= min)![1];
+const FAME_PT = ['desconhecido', 'algumas pessoas sabem seu nome', 'conhecido por aqui', 'conhecido na região', 'famoso por toda a terra', 'uma lenda nos mundos conhecidos'];
+export const fameLabelIn = (fame: number, lang: 'en' | 'pt' = 'en') =>
+  lang === 'pt' ? FAME_PT[FAME_TIERS.findLastIndex(([min]) => fame >= min)]! : fameLabel(fame);

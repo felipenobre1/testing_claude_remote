@@ -236,3 +236,37 @@ test('a scene beat never blocks the turn: harmless slips are fixed, a hopeless b
   s.store.close();
   t.store.close();
 });
+
+test('in Portuguese: the narrator renders the result lines (numbers checked) and writes ideas after the turn is decided', async () => {
+  const store = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: adventurePack, rng: fixedRng(1), beats: false, narrator: true });
+  const { game } = engine.newGame({ language: 'Brazilian Portuguese' });
+  assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., 05:40 · .* · dr 30\.00 · ❤ 100\/100 · ⚔ combate 2 · ★ algumas pessoas sabem seu nome ──$/);
+
+  const fightTurn = interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', suggestions: ['Treinar sozinho'],
+    actions: [{ action: 'fight', opponent: 'um bandido de beco', threat: 2, intent: 'drive_off', weaponName: 'curved knife', witnessed: false }] });
+  const prose = 'O bandido avança; a faca do seu pai encontra o braço dele, e ele foge pelo beco.';
+  llm.enqueue('interpret', fightTurn)
+    .enqueue('narrate',
+      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100).'] }, // wrong number
+      { prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'],
+        lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100).'] });
+  const r = await engine.takeTurn({ gameId: game.id, input: 'enfrento o bandido' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.equal(r.text, `${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. Um bandido de beco foge. Você levou um corte na perna (−6; 94/100).`);
+  assert.deepEqual(r.suggestions, ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve']); // the narrator's, not the interpreter's
+  assert.match(r.results[0]!, /^⚔ Fight — um bandido de beco: decisive victory/); // the record stays English
+  const calls = llm.callsFor('narrate');
+  assert.match(calls[0]!.user, /THE RESULT LINES \(the game shows these under your passage\):\n1\. ⚔ Fight — um bandido de beco: decisive victory/);
+  assert.match(calls[1]!.user, /lines\[0\] must keep every number of RESULT LINE 1 exactly/);
+
+  // Next turn: the previous ideas are passed so they are not repeated.
+  llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 5, narration: '' }))
+    .enqueue('narrate', { prose: 'Você respira fundo e limpa a lâmina no casaco.', suggestions: ['Ir até o pátio de Oda'], lines: [] });
+  await engine.takeTurn({ gameId: game.id, input: 'limpo a faca' });
+  assert.match(llm.callsFor('narrate').at(-1)!.user, /PREVIOUS IDEAS \(do not repeat\): Seguir o rastro de sangue até o esconderijo dele · Procurar Oda e contar o que houve/);
+  // Seek is for people you can't reach yet; known people are visited.
+  assert.match(llm.callsFor('interpret')[0]!.system, /seek: ONLY for a person or organisation Rhen does not yet know how to reach/);
+  store.close();
+});

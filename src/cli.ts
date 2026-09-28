@@ -8,6 +8,9 @@ import { HttpPageFetcher } from './engine/web.ts';
 import { WorldCreation, type CreationResult } from './engine/creation.ts';
 import type { LLMProvider } from './llm/provider.ts';
 import { PACKS, packById } from './packs/index.ts';
+import { longDate, UI, uiLang, type UiLang } from './i18n.ts';
+import { upcoming } from './engine/planner.ts';
+import type { WorldSeed } from './domain/world.ts';
 import type { GamePack } from './packs/types.ts';
 
 const USAGE = `Living Story Engine
@@ -102,9 +105,9 @@ function lineReader() {
 type Reader = ReturnType<typeof lineReader>;
 
 /** Shows a live timer while the model works, so a slow reply never looks like a freeze. */
-async function working<T>(label: string, p: Promise<T>): Promise<T> {
+async function working<T>(label: string, p: Promise<T>, lang: UiLang = 'en'): Promise<T> {
   const t0 = Date.now();
-  const tick = () => stdout.write(`\r⏳ ${label}… ${Math.round((Date.now() - t0) / 1000)}s (you can type ahead)`);
+  const tick = () => stdout.write(`\r⏳ ${label}… ${Math.round((Date.now() - t0) / 1000)}s (${UI[lang].typeAhead})`);
   tick();
   const timer = setInterval(tick, 1000);
   try {
@@ -117,12 +120,20 @@ async function working<T>(label: string, p: Promise<T>): Promise<T> {
 
 /** In a literary world the narrator writes the opening scene; otherwise (or if it fails) the plain opening is shown. */
 async function narratedOpening(engine: Engine, gameId: string, plain: string): Promise<string> {
-  const prose = await working('the narrator is setting the scene', engine.openingProse(gameId));
+  const lang = langOf(engine.store, gameId);
+  const prose = await working(UI[lang].settingScene, engine.openingProse(gameId), lang);
   if (!prose) return plain;
-  const header = plain.split('\n')[0];
-  const coming = plain.includes('Coming up:') ? `\n\n${plain.slice(plain.indexOf('Coming up:')).replace(/\n\nWhat do you do\?$/, '')}` : '';
-  return `${header}\n\n${prose}${coming}`;
+  const store = engine.store;
+  const game = store.getGame(gameId)!;
+  const place = store.getWorldSeed<WorldSeed>(gameId)?.world.place ?? store.getScene(gameId).location;
+  const soon = upcoming(store, gameId, game.gameTime, 14).map((i) => {
+    const x = i.payload as { title: string; location?: string | null };
+    return `  • ${longDate(i.dueGameTime, lang)} — ${x.title}${x.location ? ` (${x.location})` : ''}`;
+  });
+  return `${place} — ${longDate(game.gameTime, lang)}\n\n${prose}${soon.length ? `\n\n${UI[lang].comingUp}\n${soon.join('\n')}` : ''}`;
 }
+
+const langOf = (store: Store, gameId: string) => uiLang(store.getWorldSeed<WorldSeed>(gameId)?.style.language);
 
 async function design(reader: Reader, creation: WorldCreation, draftId: string, intro: string): Promise<CreationResult | null> {
   console.log(`\n${intro}\n\n(/draft shows what's decided · /finalize shows the final summary · /quit saves the draft for later)\n`);
@@ -155,7 +166,9 @@ async function design(reader: Reader, creation: WorldCreation, draftId: string, 
 async function play(reader: Reader, engine: Engine, gameId: string, debug: boolean, intro: string) {
   const store = engine.store;
   let hints = true;
-  console.log(`\n${intro}\n\n(game ${gameId} — /quit to leave; everything is saved after each turn)\n\n${formatStatusLine(store, gameId)}\n`);
+  const lang = langOf(store, gameId);
+  const t = UI[lang];
+  console.log(`\n${intro}\n\n${UI[langOf(store, gameId)].gameFooter(gameId)}\n\n${formatStatusLine(store, gameId)}\n`);
   {
     for (;;) {
       const raw = await reader.next('> ');
@@ -164,16 +177,16 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       if (!line) continue;
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
-      if (line === '/hints') { hints = !hints; console.log(`next-move ideas ${hints ? 'on' : 'off'}`); continue; }
+      if (line === '/hints') { hints = !hints; console.log(hints ? t.hintsOn : t.hintsOff); continue; }
       if (line === '/status') { console.log(formatStatus(store, gameId)); continue; }
       if (line.startsWith('/inspect')) {
         const parts = line.split(/\s+/).slice(1);
         console.log(inspect(store, gameId, parts.filter((p) => p !== '--full'), parts.includes('--full')));
         continue;
       }
-      const r = await working('the world is moving', engine.takeTurn({ gameId, input: line }));
-      const ideas = hints && r.suggestions?.length ? `\n\n💡 Ideas: ${r.suggestions.join(' · ')}` : '';
-      console.log(`\n${r.text}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
+      const r = await working(t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
+      const ideas = hints && r.suggestions?.length ? `\n\n💡 ${t.ideas}: ${r.suggestions.join(' · ')}` : '';
+      console.log(`\n${r.status === 'failed' ? t.failed : r.text}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
     }

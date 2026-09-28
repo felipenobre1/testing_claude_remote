@@ -25,7 +25,7 @@ import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
-import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatSchema, type NarratorInput, type SceneBeat } from './story.ts';
+import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
@@ -139,7 +139,7 @@ export class Engine {
     };
     try {
       const res = await this.llm.complete({ task: 'narrate', system: narratorSystemPrompt(world.ctx, world.bible, player.name), user: narratorUserPrompt(input), schemaName: 'narration', schema: NarrationSchema });
-      const parsed = NarrationSchema.safeParse(JSON.parse(res.rawText));
+      const parsed = NarrationParseSchema.safeParse(JSON.parse(res.rawText));
       return parsed.success ? parsed.data.prose.trim() : null;
     } catch {
       return null;
@@ -474,18 +474,23 @@ export class Engine {
     const words: NarratorInput['words'] = [];
     if (npcOut && target && npcOut.dialogue.trim()) words.push({ speaker: target.name, text: npcOut.dialogue.trim(), how: npcOut.perceivable.trim() });
     if (beat?.opensConversation) words.push({ speaker: beat.opensConversation.name, text: beat.opensConversation.openingLine.trim(), how: '' });
-    let prose: string | null = null;
+    let narration: Narration | null = null;
+    const previousIdeas = (store.listTurns(game.id).filter((t) => t.status === 'committed').at(-1)?.response as { suggestions?: string[] } | null)?.suggestions ?? [];
     if (this.narratorEnabled && (seed.style.narration ?? 'literary') === 'literary') {
-      prose = await this.narrate(trace, world, player, economy, {
+      narration = await this.narrate(trace, world, player, economy, {
         gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
         input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
         facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
-        words, conversationEnded, choice: beat?.choice ?? null,
+        words, conversationEnded, choice: beat?.choice ?? null, previousIdeas,
+        resultLines: localized(world.ctx.language) ? results : [],
       });
     }
+    const prose = narration?.prose ?? null;
+    // What the player reads: result lines in their language when the narrator rendered them (the canonical English stays in the record).
+    const shownResults = narration && narration.lines.length === results.length && results.length ? narration.lines : results;
     const parts: string[] = [];
     if (prose) {
-      parts.push(prose, results.join('\n'));
+      parts.push(prose, shownResults.join('\n'));
     } else {
       parts.push(interp.narration.trim() || (!npcOut && interp.privateThought ? 'You turn the thought over in your head for a while.' : ''));
       parts.push(results.slice(0, playerResultCount).join('\n'));
@@ -508,7 +513,7 @@ export class Engine {
       conversationEnded,
       results,
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
-      suggestions: interp.suggestions ?? [],
+      suggestions: narration?.suggestions.length ? narration.suggestions : (interp.suggestions ?? []),
       ...(beat ? { beat: beat.title } : {}),
     });
     this.commit(game, player, plan, economy, trace, response, input);
@@ -743,11 +748,12 @@ export class Engine {
   }
 
   /** Literary narration of a fully decided turn. Falls back to the concise text if the narrator fails twice. */
-  private async narrate(trace: Trace, world: ReturnType<Engine['worldOf']>, player: Character, _economy: WorldPlanner, input: NarratorInput): Promise<string | null> {
+  private async narrate(trace: Trace, world: ReturnType<Engine['worldOf']>, player: Character, _economy: WorldPlanner, input: NarratorInput): Promise<Narration | null> {
     try {
-      const out = await this.callStructured<{ prose: string }>(trace, 'narrate', narratorSystemPrompt(world.ctx, world.bible, player.name), narratorUserPrompt(input),
-        'narration', NarrationSchema, NarrationSchema, (n) => narrationProblems(n.prose, input.words));
-      return out.prose.trim();
+      const out = await this.callStructured<Narration>(trace, 'narrate', narratorSystemPrompt(world.ctx, world.bible, player.name), narratorUserPrompt(input),
+        'narration', NarrationSchema, NarrationParseSchema as unknown as z.ZodType<Narration>,
+        (n) => [...narrationProblems(n.prose, input.words), ...(input.resultLines?.length ? linesProblems(n.lines, input.resultLines) : [])]);
+      return { ...out, prose: out.prose.trim() };
     } catch (e) {
       if (!(e instanceof TurnFailure)) throw e;
       trace.narratorFailed = (e as Error).message;

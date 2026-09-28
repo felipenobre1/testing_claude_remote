@@ -342,12 +342,12 @@ export const startupPack: GamePack = {
     // An NPC sees the companies they own part of — nothing else.
     npc: (api, npcId) => st(api).companiesOf(npcId).flatMap((c) => companyLines(api, c)),
   },
-  statusParts(store, gameId, playerId) {
+  statusParts(store, gameId, playerId, lang = 'en') {
     return companyRepo.of(store, playerId).map((c) => {
       const mine = companyRepo.holdings(store, c.id).find((h) => h.characterId === playerId)!;
       const cash = store.getAccountOf(gameId, 'entity', c.id)?.balanceCents ?? 0;
-      const users = c.signups || c.activeUsers ? ` · ${c.signups} signups / ${c.activeUsers} active` : '';
-      if (!c.incorporated) return `${c.name} (side project) · ${c.productStage}${users}`;
+      const users = c.signups || c.activeUsers ? (lang === 'pt' ? ` · ${c.signups} cadastros / ${c.activeUsers} ativos` : ` · ${c.signups} signups / ${c.activeUsers} active`) : '';
+      if (!c.incorporated) return `${c.name} (${lang === 'pt' ? 'projeto paralelo' : 'side project'}) · ${c.productStage}${users}`;
       return `${c.name} ${pct(mine.shares, c.totalShares)} · €${(cash / 100).toLocaleString('en-GB', { minimumFractionDigits: 2 })} · ${c.productStage}${users}`;
     });
   },

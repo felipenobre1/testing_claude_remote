@@ -122,7 +122,17 @@ export function beatProblems(b: SceneBeat, ctx: { characters: Character[]; playe
 
 export const NarrationSchema = z.object({
   prose: z.string().min(20).max(8000),
+  /** 2–3 next moves, written after everything is decided — they answer the situation as the passage ends. */
+  suggestions: z.array(z.string().min(3).max(160)).max(3),
+  /** The game's result lines in the player's language (same count and numbers); [] when the player plays in English. */
+  lines: z.array(z.string().max(800)).max(40),
 });
+/** Parsing is lenient about the two extra fields (older scripted replies, a model that omits them). */
+export const NarrationParseSchema = NarrationSchema.extend({
+  suggestions: NarrationSchema.shape.suggestions.default([]),
+  lines: NarrationSchema.shape.lines.default([]),
+});
+export type Narration = z.infer<typeof NarrationSchema>;
 
 export function narratorSystemPrompt(world: WorldContext, bible: string, playerName: string): string {
   return `You are the narrator of an interactive novel set in ${world.line}. The reader is ${playerName}; write in the second person, present tense.
@@ -136,8 +146,12 @@ Write this turn as a passage of a novel:
 - Never decide what ${playerName} does, says or feels about a choice next.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
 - Length: 2–6 paragraphs; shorter for small moments.
-- ${contentRule(world.violence, 'narrator')}${languageRule(world.language, 'the prose')}
-Return JSON: { "prose": "..." }`;
+- ${contentRule(world.violence, 'narrator')}
+
+Also return:
+- suggestions: 2–3 next moves for the reader as short imperative phrases, grounded in how YOUR passage ends — above all the decision now in front of them (accept, refuse, answer, flee, bargain…) — and in what they know (people, places, upcoming events). Never repeat PREVIOUS IDEAS, never suggest what the reader just did.
+- lines: ${localized(world.language) ? `THE RESULT LINES rendered in ${world.language}, same count and order; keep emoji, names and every number exactly (you may adapt decimal separators).` : '[] (the reader plays in English).'}${languageRule(world.language, 'the prose, suggestions and lines')}
+Return JSON: { "prose": "...", "suggestions": [...], "lines": [...] }`;
 }
 
 export interface NarratorInput {
@@ -153,7 +167,11 @@ export interface NarratorInput {
   words: { speaker: string; text: string; how: string }[];
   conversationEnded: boolean;
   choice: string | null;
+  resultLines?: string[]; // the game's result lines, to be rendered in the player's language
+  previousIdeas?: string[];
 }
+
+export const localized = (language: string) => Boolean(language) && !/^english$/i.test(language.trim());
 
 export function narratorUserPrompt(n: NarratorInput): string {
   return [
@@ -168,6 +186,8 @@ export function narratorUserPrompt(n: NarratorInput): string {
     'WORDS SPOKEN (quote exactly):', ...(n.words.length ? n.words.map((w) => `- ${w.speaker}${w.how ? ` (${w.how})` : ''}: "${w.text}"`) : ['- (none)']),
     ...(n.conversationEnded ? ['The conversation ends here.'] : []),
     ...(n.choice ? [`THE DECISION NOW IN FRONT OF THE PLAYER: ${n.choice}`] : []),
+    ...(n.previousIdeas?.length ? [`PREVIOUS IDEAS (do not repeat): ${n.previousIdeas.join(' · ')}`] : []),
+    ...(n.resultLines?.length ? ['THE RESULT LINES (the game shows these under your passage):', ...n.resultLines.map((l, i) => `${i + 1}. ${l}`)] : []),
   ].join('\n');
 }
 
@@ -177,4 +197,12 @@ const squash = (s: string) => s.toLowerCase().replace(/[\s"'“”‘’«».,!?
 export function narrationProblems(prose: string, words: NarratorInput['words']): string[] {
   const p = squash(prose);
   return words.filter((w) => w.text.trim() && !p.includes(squash(w.text))).map((w) => `the prose must quote ${w.speaker}'s words exactly: "${w.text}"`);
+}
+
+const numbers = (s: string) => (s.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/\D/g, '')).sort();
+
+/** Rendered result lines must match the originals one-to-one, with exactly the same numbers. */
+export function linesProblems(lines: string[], source: string[]): string[] {
+  if (lines.length !== source.length) return [`lines must have exactly ${source.length} entries (one per RESULT LINE), got ${lines.length}`];
+  return source.flatMap((src, i) => (numbers(src).join('|') === numbers(lines[i]!).join('|') ? [] : [`lines[${i}] must keep every number of RESULT LINE ${i + 1} exactly`]));
 }

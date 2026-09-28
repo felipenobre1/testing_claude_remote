@@ -6,6 +6,7 @@ import { formatGameTime, truncate } from '../engine/util.ts';
 import { formatMoney as formatMoney2 } from '../engine/planner.ts';
 import type { GamePack } from '../packs/types.ts';
 import { packById } from '../packs/index.ts';
+import { shortDate, UI, uiLang } from '../i18n.ts';
 import { startupPack } from '../packs/startup/index.ts';
 import type { WorldSeed } from '../domain/world.ts';
 
@@ -194,20 +195,22 @@ export function formatFacts(store: Store, gameId: string): string {
 /** One-line game HUD, built only from canonical state: time · place · cash · companies · promises · conversation. */
 export function formatStatusLine(store: Store, gameId: string, pack: GamePack = packFor(store, gameId)): string {
   const game = store.getGame(gameId)!;
+  const lang = uiLang(store.getWorldSeed<WorldSeed>(gameId)?.style.language);
+  const t = UI[lang];
   const me = game.playerCharacterId;
   const scene = store.getScene(gameId);
   const names = new Map(store.listCharacters(gameId).map((x) => [x.id, x.name.split(' ')[0]]));
   const parts = [
-    formatGameTime(game.gameTime).replace(/^(\w{3})\w*,? (\d+) (\w{3})\w* \d{4}/, '$1 $2 $3'),
+    shortDate(game.gameTime, lang),
     scene.location.replace(/, Milan$/, ''),
     formatMoney2(store.getAccountOf(gameId, 'character', me)?.balanceCents ?? 0, pack.currency.symbol),
-    ...pack.statusParts(store, gameId, me),
+    ...pack.statusParts(store, gameId, me, lang),
   ];
   const open = store.listObligationsInvolving(me).filter((o) => o.status === 'open');
   const overdue = open.filter((o) => o.dueGameTime && o.dueGameTime <= game.gameTime).length;
-  if (open.length) parts.push(`${open.length} promise${open.length > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`);
+  if (open.length) parts.push(t.promises(open.length, overdue));
   const talk = scene.interactionId ? store.getInteraction(scene.interactionId) : undefined;
-  if (talk) parts.push(`${talk.channel === 'message' ? 'texting' : talk.channel === 'phone' ? 'on the phone with' : 'with'} ${talk.participantIds.filter((id) => id !== me).map((id) => names.get(id)).join(', ')}`);
+  if (talk) parts.push(`${talk.channel === 'message' ? t.texting : talk.channel === 'phone' ? t.onPhone : t.with} ${talk.participantIds.filter((id) => id !== me).map((id) => names.get(id)).join(', ')}`);
   return `── ${parts.join(' · ')} ──`;
 }
 
