@@ -482,7 +482,8 @@ export class Engine {
     const conversationOpen = Boolean(interaction && !conversationEnded);
     const playerDiedBeforeBeat = economy.ctx.player.status === 'dead';
     const pressing = trace.world?.consequences ?? [];
-    if (!playerDiedBeforeBeat && this.beatsEnabled && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed, pressing: pressing.length })) {
+    const held = Boolean(this.pack.holdsScene?.(economy)); // e.g. a fight in progress: nothing interrupts it, and it is not a quiet turn
+    if (!playerDiedBeforeBeat && this.beatsEnabled && !held && beatDue(store, game.id, seed.style.pace ?? 'steady', { npcResponded: Boolean(npcOut), minutes: interp.minutesElapsed, pressing: pressing.length })) {
       beat = await this.sceneBeat(trace, game, player, everyone, pending, economy, plan, interp, conversationOpen, world, pressing);
     }
 
@@ -539,6 +540,7 @@ export class Engine {
       suggestions: economy.ctx.player.status === 'dead' ? [] : narration?.suggestions.length ? narration.suggestions : (interp.suggestions ?? []),
       ...(economy.ctx.player.status === 'dead' ? { gameOver: true } : {}),
       ...(beat ? { beat: beat.title } : {}),
+      ...(held ? { held: true } : {}),
     });
     this.commit(game, player, plan, economy, trace, response, input);
     return response;

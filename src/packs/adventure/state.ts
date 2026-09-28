@@ -3,14 +3,48 @@ import type { PackTurnState } from '../types.ts';
 
 // Adventure pack state: bodies (health, injuries), skills that grow with practice, fame, and what people carry.
 
-export const SKILLS = ['combat', 'stealth', 'athletics', 'survival', 'perception', 'persuasion', 'deception', 'lore'] as const;
+export const SKILLS = ['combat', 'stealth', 'athletics', 'survival', 'perception', 'persuasion', 'deception', 'lore', 'arcana', 'performance'] as const;
 export type Skill = (typeof SKILLS)[number];
 export const ATTRIBUTES = ['strength', 'agility', 'wits', 'presence'] as const;
 export type Attribute = (typeof ATTRIBUTES)[number];
 /** Which attribute backs each skill. */
 export const SKILL_ATTR: Record<Skill, Attribute> = {
   combat: 'strength', stealth: 'agility', athletics: 'agility', survival: 'wits', perception: 'wits', persuasion: 'presence', deception: 'presence', lore: 'wits',
+  arcana: 'wits', performance: 'presence',
 };
+
+// ---- fights that last several exchanges ----
+export const MOVES = ['strong', 'quick', 'defend', 'feint', 'grapple', 'ground'] as const;
+export type Move = (typeof MOVES)[number];
+export type FoeIntent = 'kill' | 'hurt' | 'humiliate' | 'drive_off' | 'spar';
+export interface Combatant {
+  characterId: string | null; // a known person, or null for an unnamed group ("two dock thugs")
+  name: string;
+  threat: number; // 1–5
+  health: number;
+  maxHealth: number;
+  stamina: number; // 0–100
+  advantage: number; // 0–3, momentum from winning exchanges
+  style: 'aggressive' | 'defensive' | 'tricky' | 'brute';
+  intent: FoeIntent;
+  blunt: boolean; // fists/clubs/training weapons: bruises, not cuts
+  status: 'fighting' | 'down' | 'yielded' | 'fled' | 'dead';
+  protects: string | null; // the person these guards stand in front of
+}
+export interface Encounter {
+  kind: 'fight' | 'spar';
+  aggressor: 'player' | 'npc';
+  playerIntent: 'kill' | 'subdue' | 'drive_off' | 'defend' | 'duel' | 'spar';
+  target: string | null; // who the player is really after (behind the guards)
+  exchanges: number;
+  playerStamina: number;
+  playerAdvantage: number;
+  witnessed: boolean;
+  weaponName: string | null;
+  opponents: Combatant[];
+  location: string;
+  startedGameTime: string; lastTurnId: string | null;
+}
 export const MAX_LEVEL = 5;
 /** XP needed to go from character level n to n+1. */
 export const xpForNext = (level: number) => 100 * level;
@@ -77,6 +111,13 @@ export const ADVENTURE_MIGRATIONS = [
   ALTER TABLE adv_profiles ADD COLUMN level INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE adv_profiles ADD COLUMN points INTEGER NOT NULL DEFAULT 0;
   `,
+  /* adventure v3 — a fight in progress lasts several exchanges (one per game) */ `
+  CREATE TABLE adv_encounters (
+    game_id    TEXT PRIMARY KEY REFERENCES games(id),
+    json       TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 type Row = Record<string, any>;
@@ -97,6 +138,7 @@ const INSERT_ITEM = `INSERT INTO adv_items (id, game_id, owner_id, name, kind, q
 export const advRepo = {
   profile: (store: Store, characterId: string) => { const r = store.get('SELECT * FROM adv_profiles WHERE character_id = :c', { c: characterId }); return r && mapProfile(r); },
   profiles: (store: Store, gameId: string) => store.all('SELECT * FROM adv_profiles WHERE game_id = :g', { g: gameId }).map(mapProfile),
+  encounter: (store: Store, gameId: string): Encounter | null => { const r = store.get('SELECT json FROM adv_encounters WHERE game_id = :g', { g: gameId }); return r ? JSON.parse(r.json) : null; },
   items: (store: Store, gameId: string) => store.all('SELECT * FROM adv_items WHERE game_id = :g ORDER BY rowid', { g: gameId }).map(mapItem),
   saveProfile: (store: Store, p: Profile) => store.run(UPSERT_PROFILE, profileParams(p)),
   insertItem: (store: Store, i: Item) => store.run(INSERT_ITEM, { ...i }),
@@ -110,11 +152,18 @@ export class AdventureState implements PackTurnState {
   private newItems: Item[] = [];
   private updatedItems = new Set<string>();
   private removedItems = new Set<string>();
+  /** The fight in progress, if any (null when none). */
+  encounter: Encounter | null;
+  private encounterDirty = false;
+  private readonly gameId: string;
 
   constructor(store: Store, gameId: string) {
+    this.gameId = gameId;
     for (const p of advRepo.profiles(store, gameId)) this.profiles.set(p.characterId, p);
     for (const i of advRepo.items(store, gameId)) this.items.set(i.id, i);
+    this.encounter = advRepo.encounter(store, gameId);
   }
+  setEncounter(e: Encounter | null) { this.encounter = e; this.encounterDirty = true; }
 
   profileOf(characterId: string, gameId: string, now: string, init?: Partial<Profile>): Profile {
     let p = this.profiles.get(characterId);
@@ -159,6 +208,16 @@ export class AdventureState implements PackTurnState {
     for (const id of this.removedItems) {
       store.run('DELETE FROM adv_items WHERE id = :id', { id });
       out.push({ table: 'adv_items', op: 'delete', id });
+    }
+    if (this.encounterDirty) {
+      if (this.encounter) {
+        store.run(`INSERT INTO adv_encounters (game_id, json, updated_at) VALUES (:g, :j, :t) ON CONFLICT (game_id) DO UPDATE SET json = :j, updated_at = :t`,
+          { g: this.gameId, j: JSON.stringify(this.encounter), t: new Date().toISOString() });
+        out.push({ table: 'adv_encounters', op: 'upsert', id: this.gameId, note: `exchange ${this.encounter.exchanges}` });
+      } else {
+        store.run('DELETE FROM adv_encounters WHERE game_id = :g', { g: this.gameId });
+        out.push({ table: 'adv_encounters', op: 'delete', id: this.gameId });
+      }
     }
     return out;
   }

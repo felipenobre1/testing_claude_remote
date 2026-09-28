@@ -59,8 +59,8 @@ export function beatDue(store: Store, gameId: string, pace: WorldSeed['style']['
   if (thisTurn.minutes >= 6 * 60) return true;
   let quietTurns = 1; // this one
   for (const t of store.listTurns(gameId).filter((x) => x.status === 'committed').reverse()) {
-    const r = t.response as { npc?: unknown; beat?: unknown } | null;
-    if (!r || r.beat || r.npc) break;
+    const r = t.response as { npc?: unknown; beat?: unknown; held?: unknown } | null;
+    if (!r || r.beat || r.npc || r.held) break; // a fight or a conversation is not a quiet turn
     quietTurns++;
   }
   return quietTurns >= THRESHOLD[pace];
@@ -165,6 +165,7 @@ Write this turn as a passage of a novel:
 - CONTINUITY: the PREVIOUS PASSAGE is what the reader has just read. Continue from it like the next paragraph of the same book. Do not describe the place, the light, the smells, the weather or the reader's gear again unless something changed (a new place, time passing, a new sense detail that matters). Never reuse its images or phrases.
 - The reader just wrote their own words and actions: do NOT repeat them back. Show their effect instead (a reaction, a silence, the other person's face); at most echo a few words when it matters.
 - Everything in THE FACTS OF THIS TURN is decided and true. Narrate it faithfully: never change, soften or add outcomes (who wins, who dies, what is found, what is paid), never invent numbers. You may show HOW it happened.
+- A fight goes exchange by exchange. If the facts show an exchange but not that the fight is over, narrate only that exchange — the blows, the breath, the ground, the faces — and stop in the middle of it, with the opponent's next threat clear: the player chooses the next move. Suggestions are then concrete moves for this moment of the fight (and a way out).
 - Quote every line of dialogue listed under WORDS SPOKEN exactly as written (you may add who says it, how, gestures around it). Do not invent other dialogue for anyone.
 - Never decide what ${playerName} does, says or feels about a choice next.
 - Never move the reader or let time pass beyond THE FACTS: the passage ends where WHERE THE READER IS AT THE END says, at that time. Do not narrate a departure, a journey or an arrival the facts don't contain. If the reader only said they will go somewhere, they have not gone yet.

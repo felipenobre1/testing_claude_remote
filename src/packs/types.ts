@@ -68,6 +68,8 @@ export interface GamePack {
   };
   /** Someone attacks the player (from a conversation or a scene beat). The pack resolves it; without this hook, attacks are words only. */
   npcAttack?(api: WorldPlanner, attackerId: string, attack: NpcAttack): void;
+  /** True while the pack holds the scene (e.g. a fight in progress): no scene beat may interrupt it. */
+  holdsScene?(api: WorldPlanner): boolean;
   /** Player commands outside the story (e.g. /sheet, /spend): read or adjust the player's own sheet. Not world actions. */
   commands?: Record<string, { help: string; run(store: Store, gameId: string, args: string[], lang: 'en' | 'pt'): string }>;
   /** Once per game week while time passes (Monday 08:00): pack dynamics; returns lines for the weekly report. */

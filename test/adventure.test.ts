@@ -28,7 +28,14 @@ function start(opts: { roll?: number; beats?: boolean; narrator?: boolean; direc
   return { store, llm, engine, game, player, opening, me, char, turn };
 }
 const fight = (opponent: string, extra: Record<string, unknown> = {}) =>
-  ({ action: 'fight', opponent, threat: 3, intent: 'kill', weaponName: 'curved knife', witnessed: true, guards: null, ...extra });
+  ({ action: 'fight', opponent, count: 1, threat: 3, style: 'aggressive', intent: 'kill', weaponName: 'curved knife', witnessed: true, guards: null, move: 'strong', how: 'a slash', cleverness: 0, ...extra });
+const move = (m: string, extra: Record<string, unknown> = {}) => ({ action: 'combat_move', target: null, weaponName: null, move: m, how: m, cleverness: 0, ...extra });
+/** Keeps making the same move until the fight is over (or `max` exchanges). Returns every turn's text. */
+async function fightOn(s: ReturnType<typeof start>, m: string, max = 12) {
+  const texts: string[] = [];
+  for (let i = 0; i < max && advRepo.encounter(s.store, s.game.id); i++) texts.push((await s.turn(m, { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move(m)] })).text);
+  return texts;
+}
 
 test('the example world: a fighter with skills, gear, fame, a debt and people who matter', () => {
   const s = start();
@@ -42,13 +49,17 @@ test('the example world: a fighter with skills, gear, fame, a debt and people wh
   s.store.close();
 });
 
-test('fights are decided by the engine: skill, gear, a bounded roll; a killed person is dead for good', async () => {
-  // Roll 1 (+5): 2 combat + knife 2 + coat 0.5 vs Kesh 3 + 1.5 → margin +5 → decisive.
+test('fights go exchange by exchange: moves, a counter-table, momentum, a d20; a killed person is dead for good', async () => {
+  // Roll 1: d20 20 every time, Kesh always grapples. A heavy attack beats a grapple (+1); each clean hit builds the upper hand.
   const s = start({ roll: 1 });
-  const r = await s.turn('I draw my knife and go for Kesh\'s throat', { intents: ['general_action'], minutesElapsed: 2, narration: 'Steel.',
-    actions: [fight('Kesh Adar')] });
-  assert.match(r.text, /⚔ Fight — Kesh Adar: decisive victory\. Kesh Adar is dead\. You took a cut to the leg \(−6; 94\/100\)\. · fame \+2 \(known around here\)/);
-  assert.ok(s.me().xp > 0); // fighting gives experience
+  const r = await s.turn('I draw my knife and go for Kesh\'s throat', { intents: ['general_action'], minutesElapsed: 1, narration: 'Steel.', actions: [fight('Kesh Adar')] });
+  assert.match(r.text, /⚔ A fight begins — Kesh Adar\.\n⚔ Exchange 1 · your heavy attack vs Kesh Adar's grapple: clean hit on Kesh Adar \(−24\)\. \[you 5 \(combat 2, strength \+0\.5, curved knife \+2, padded desert coat \+0\.5\) heavy attack vs grapple \+1 vs Kesh Adar 4\.5 · d20 20 → \+6\.5\]\n   You ❤ 100\/100 · 💨 85 · ▲1 \| Kesh Adar: hurt/);
+  assert.ok(advRepo.encounter(s.store, s.game.id)); // the fight goes on: one exchange per player message
+  const texts = await fightOn(s, 'strong');
+  assert.match(texts.at(-1)!, /Kesh Adar: dead\n⚔ The fight is over: you win — Kesh Adar dead\. · fame \+2 \(known around here\) · ✨ \+\d+ XP/);
+  assert.match(lastPrompt(s.llm, 'interpret'), /Fight in progress \(fight, exchange \d; every player message is a combat_move until it ends\)/);
+  assert.equal(advRepo.encounter(s.store, s.game.id), null);
+  assert.ok(s.me().xp > 0);
   assert.equal(s.char('Kesh Adar').status, 'dead');
   assert.equal(s.me().fame, 3);
   assert.match(s.me().deeds.join(), /killed Kesh Adar in front of witnesses/);
@@ -60,19 +71,25 @@ test('fights are decided by the engine: skill, gear, a bounded roll; a killed pe
   const again = await s.turn('I stab Kesh again', { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [fight('Kesh Adar')] });
   assert.match(again.text, /✗ Kesh Adar is already dead\./);
   assert.match(lastPrompt(s.llm, 'interpret'), /Kesh Adar \(rising pit fighter sponsored by House Varr, DEAD\)/);
+  const none = await s.turn('I parry', { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('defend')] });
+  assert.match(none.text, /✗ There is no fight going on\./);
   s.store.close();
 });
 
-test('losing hurts; a fight nobody means to be lethal never kills', async () => {
-  const s = start({ roll: 0 }); // roll −5 and minimum damage rolls
-  const r = await s.turn('I pick a fight with the house guards', { intents: ['general_action'], minutesElapsed: 2, narration: '',
-    actions: [fight('three house guards in lamellar armour', { threat: 5, intent: 'drive_off' })] });
-  assert.match(r.text, /⚔ Fight — three house guards in lamellar armour: crushing defeat\. Three house guards in lamellar armour beats you down completely — you are at their mercy\. You took a grievous wound to the left arm \(−40; 60\/100\)\./);
-  for (let i = 0; i < 3; i++) {
-    await s.turn('again', { intents: ['general_action'], minutesElapsed: 2, narration: '', actions: [fight('three house guards in lamellar armour', { threat: 5, intent: 'drive_off', witnessed: false })] });
-  }
-  assert.equal(s.me().health, 1);
-  assert.match(formatStatusLine(s.store, s.game.id), /❤ 1\/100/);
+test('losing hurts; several opponents; a fight nobody means to be lethal never kills', async () => {
+  const s = start({ roll: 0 }); // d20 1 every time
+  const r = await s.turn('I pick a fight with the house guards', { intents: ['general_action'], minutesElapsed: 1, narration: '',
+    actions: [fight('house guard', { count: 3, threat: 5, intent: 'drive_off' })] });
+  assert.match(r.text, /⚔ A fight begins — house guard 1, house guard 2, house guard 3\.\n⚔ Exchange 1 · your heavy attack vs house guard 1's heavy attack: house guard 1 lands a heavy blow — a cut to the left arm \(−11; 89\/100\)/);
+  const texts = await fightOn(s, 'quick');
+  assert.match(texts.at(-1)!, /⚔ The fight is over: you are beaten — at their mercy/);
+  assert.ok(s.me().health >= 1 && s.me().health <= 50, `health ${s.me().health}`); // they only meant to drive you off
+  // Again, unseen: beaten again, still alive.
+  await s.turn('again', { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [fight('house guard', { count: 3, threat: 5, intent: 'drive_off', witnessed: false })] });
+  await fightOn(s, 'strong');
+  assert.ok(s.me().health >= 1);
+  assert.equal(s.store.getCharacter(s.player.id)!.status, 'alive');
+  assert.match(formatStatusLine(s.store, s.game.id), /❤ \d+\/100/);
   s.store.close();
 });
 
@@ -80,9 +97,16 @@ test('whoever is in the scene witnesses the fight: the NPC\'s reaction must be c
   const s = start({ roll: 1 });
   s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: 'Watch this.',
     actions: [fight('a drunk dock thug', { threat: 1, intent: 'subdue' })] }))
-    .enqueue('npc_turn', npc({ dialogue: 'Not bad. Come at dawn.' }));
+    .enqueue('npc_turn', npc({ dialogue: 'Not bad.' }));
   await s.engine.takeTurn({ gameId: s.game.id, input: 'I floor a thug in front of Oda' });
-  assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED \(decided by the game — your reaction must be consistent with it\)\nRhen fought a drunk dock thug \(subdue, with curved knife\): decisive victory; a drunk dock thug is beaten and at your mercy/);
+  assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED \(decided by the game — your reaction must be consistent with it\)\nRhen and a drunk dock thug fight \(exchange 1\): clean hit on a drunk dock thug/);
+  s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Oda Venn', relationHint: null }, spokenText: 'And stay down.', actions: [move('strong')] }))
+    .enqueue('npc_turn', npc({ dialogue: 'Come at dawn.' }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I finish him' });
+  assert.match(r.text, /⚔ The fight is over: you win — a drunk dock thug down\. · fame \+1/);
+  s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Oda Venn', relationHint: null }, spokenText: 'Well?' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Dawn.' }));
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'Well?' });
   assert.match(lastPrompt(s.llm, 'npc_turn'), /What people say about Rhen: a few people know your name — beat a drunk dock thug in front of witnesses/);
   s.store.close();
 });
@@ -244,27 +268,38 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   const { game } = engine.newGame({ language: 'Brazilian Portuguese' });
   assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., 05:40 · .* · dr 30\.00 · ❤ 100\/100 · ⚔ combate 2 · ★ algumas pessoas sabem seu nome ──$/);
 
-  const fightTurn = interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', suggestions: ['Treinar sozinho'],
-    actions: [{ action: 'fight', opponent: 'um bandido de beco', threat: 2, intent: 'drive_off', weaponName: 'curved knife', witnessed: false, guards: null }] });
-  const prose = 'O bandido avança; a faca do seu pai encontra o braço dele, e ele foge pelo beco.';
+  const fightTurn = interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', suggestions: ['Treinar sozinho'],
+    actions: [fight('um bandido de beco', { threat: 2, intent: 'drive_off', witnessed: false })] });
+  const prose = 'O bandido avança; a faca do seu pai encontra o braço dele.';
+  const resultLines = (user: string) => {
+    const out: string[] = [];
+    for (const l of user.split('THE RESULT LINES (the game shows these under your passage):\n')[1]!.split('\n')) { const m = l.match(/^\d+\. (.*)$/); if (!m) break; out.push(m[1]!); }
+    return out;
+  };
   llm.enqueue('interpret', fightTurn)
     .enqueue('narrate',
-      { prose, suggestions: ['Voltar para a alcova'], lines: ['⚔ Luta — um bandido de beco: vitória decisiva. Ele foge. Você levou um corte na perna (−5; 95/100).'] }, // wrong numbers
-      (req: { user: string }) => {
+      (req: { user: string }) => ({ prose, suggestions: ['Voltar para a alcova'], lines: resultLines(req.user).map((l) => l.replace(/\d+/g, '7')) }), // wrong numbers
+      (req: { user: string }) => ({ prose, suggestions: ['Chutar a areia nos olhos dele', 'Recuar para o beco estreito'],
         // A faithful rendering: words translated, every number kept.
-        const en = req.user.match(/\n1\. (⚔ Fight[^\n]*)/)![1]!;
-        return { prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'],
-          lines: [en.replace('Fight', 'Luta').replace('decisive victory', 'vitória decisiva').replace('You took', 'Você levou')] };
-      });
+        lines: resultLines(req.user).map((l) => l.replace('A fight begins', 'Uma luta começa').replace('Exchange', 'Troca')) }));
   const r = await engine.takeTurn({ gameId: game.id, input: 'enfrento o bandido' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.ok(r.text.startsWith(`${prose}\n\n⚔ Luta — um bandido de beco: vitória decisiva. `), r.text);
-  assert.match(r.text, /Você levou a cut to the leg \(−6; 94\/100\)\. · ✨ \+38 XP \[you 5 \(combat 2, strength \+0\.5, curved knife \+2, padded desert coat \+0\.5\) vs um bandido de beco 2\.6 · d20 20 → \+7\.4\]$/);
-  assert.deepEqual(r.suggestions, ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve']); // the narrator's, not the interpreter's
-  assert.match(r.results[0]!, /^⚔ Fight — um bandido de beco: decisive victory/); // the record stays English
+  assert.ok(r.text.startsWith(`${prose}\n\n⚔ Uma luta começa — um bandido de beco.\n⚔ Troca 1 · your heavy attack`), r.text);
+  assert.match(r.text, /\[you 5 \(combat 2, strength \+0\.5, curved knife \+2, padded desert coat \+0\.5\) [^\]]*d20 20 → \+[\d.]+\]/);
+  assert.deepEqual(r.suggestions, ['Chutar a areia nos olhos dele', 'Recuar para o beco estreito']); // the narrator's, not the interpreter's
+  assert.equal(r.results[0], '⚔ A fight begins — um bandido de beco.'); // the record stays English
   const calls = llm.callsFor('narrate');
-  assert.match(calls[0]!.user, /THE RESULT LINES \(the game shows these under your passage\):\n1\. ⚔ Fight — um bandido de beco: decisive victory/);
-  assert.match(calls[1]!.user, /lines\[0\] must keep every number of RESULT LINE 1 exactly/);
+  assert.match(calls[0]!.user, /THE RESULT LINES \(the game shows these under your passage\):\n1\. ⚔ A fight begins — um bandido de beco\.\n2\. ⚔ Exchange 1/);
+  assert.match(calls[0]!.system, /A fight goes exchange by exchange/);
+  assert.match(calls[1]!.user, /lines\[1\] must keep every number of RESULT LINE 2 exactly/);
+
+  // The fight goes on: finish it before moving on.
+  llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('strong')] }), interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('strong')] }))
+    .enqueue('narrate', (req: { user: string }) => ({ prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'], lines: resultLines(req.user) }),
+      (req: { user: string }) => ({ prose, suggestions: ['Seguir o rastro de sangue até o esconderijo dele', 'Procurar Oda e contar o que houve'], lines: resultLines(req.user) }));
+  await engine.takeTurn({ gameId: game.id, input: 'golpeio' });
+  if (advRepo.encounter(store, game.id)) await engine.takeTurn({ gameId: game.id, input: 'golpeio' });
+  assert.equal(advRepo.encounter(store, game.id), null);
 
   // Next turn: the previous ideas are passed so they are not repeated.
   llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 5, narration: '' }))
@@ -312,14 +347,14 @@ test('an offer made in a scene beat is real: the player accepts it (not a new of
 
 test('playtest export: what the player typed and saw, what the engine decided, rejected model output', async () => {
   const s = start({ roll: 1 });
-  s.llm.enqueue('interpret', 'not json', interp({ intents: ['general_action'], minutesElapsed: 2, narration: 'Steel.', actions: [fight('a drunk dock thug', { threat: 1, intent: 'subdue' })] }));
+  s.llm.enqueue('interpret', 'not json', interp({ intents: ['general_action'], minutesElapsed: 1, narration: 'Steel.', actions: [fight('a drunk dock thug', { threat: 1, intent: 'subdue' })] }));
   await s.engine.takeTurn({ gameId: s.game.id, input: 'I floor the thug' });
   const { exportPlaytest } = await import('../src/debug/export.ts');
   const md = exportPlaytest(s.store, s.game.id);
   assert.match(md, /^# Playtest — Ashkar, the pit-city of Qasr — Rhen/);
   assert.match(md, /STORY PACE: eventful/);
   assert.match(md, /\*\*Player:\*\* I floor the thug/);
-  assert.match(md, /⚔ Fight — a drunk dock thug: decisive victory/);
+  assert.match(md, /⚔ A fight begins — a drunk dock thug\.[\s\S]*⚔ Exchange 1 · your heavy attack/);
   assert.match(md, /- model calls: interpret( [\d.]+s)? ✗ output was not valid JSON · interpret#2/);
   assert.match(md, /\| interpret \| 2 \| 1 \|/);
   assert.doesNotMatch(md, /\*\*Prompt:\*\*/); // prompts only with --full
@@ -334,18 +369,23 @@ test('people attack the player: a mortal insult gets a knife, a lethal fight can
     .enqueue('npc_turn', npc({ dialogue: 'I will gut you.', perceivable: 'His training sword clatters down; a real blade comes out.', attack: { intent: 'kill', threat: 4, how: 'a curved sword, straight for the belly' } }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I tell Kesh I slept with his wife' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.match(lastPrompt(s.llm, 'npc_turn'), /WHAT JUST HAPPENED|YOUR CHARACTER/); // briefing sanity
   assert.match(s.llm.callsFor('npc_turn')[0]!.system, /attack: only when physical violence NOW fits who you are and what just happened[\s\S]*A powerful person rarely brawls: they have it done/);
-  assert.match(r.text, /⚔ Kesh Adar attacks you to kill: crushing defeat\. Kesh Adar beats you down completely — you are at their mercy\. You took a grievous wound to the left arm \(−60; 40\/100\)/);
+  // He strikes first: the player is caught on the back foot.
+  assert.match(r.text, /⚔ A fight begins — Kesh Adar\.\n⚔ Exchange 1 · your guard vs Kesh Adar's heavy attack: Kesh Adar lands a heavy blow — a cut to the left arm \(−11; 89\/100\)\. \[[^\]]*tactics −1/);
   assert.equal(r.gameOver, undefined);
 
-  // He finishes it.
+  // Talking while he presses the attack is just another exchange.
   s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Kesh Adar', relationHint: null }, spokenText: 'Is that all?' }))
     .enqueue('npc_turn', npc({ dialogue: 'No.', attack: { intent: 'kill', threat: 4, how: 'the point, through the ribs' } }));
   const r2 = await s.engine.takeTurn({ gameId: s.game.id, input: 'I mock him' });
-  assert.match(r2.text, /⚔ Kesh Adar attacks you to kill: Kesh Adar kills you\. You took .*\. ☠ Rhen is dead\./);
-  assert.equal(r2.gameOver, true);
-  assert.deepEqual(r2.suggestions, []);
+  assert.match(r2.text, /⚔ Exchange 2 · your guard vs Kesh Adar's heavy attack/);
+
+  // He finishes it.
+  const texts = await fightOn(s, 'strong');
+  assert.match(texts.at(-1)!, /⚔ The fight is over: ☠ Rhen is dead\./);
+  const last = s.store.lastTurn(s.game.id)!;
+  assert.equal(last.response!.gameOver, true);
+  assert.deepEqual(last.response!.suggestions, []);
   assert.equal(s.store.getCharacter(s.player.id)!.status, 'dead');
   const after = await s.engine.takeTurn({ gameId: s.game.id, input: 'I get up' });
   assert.match(after.text, /^☠ Rhen is dead\. This story is over\./);
@@ -354,12 +394,14 @@ test('people attack the player: a mortal insult gets a knife, a lethal fight can
 
 test('someone who only means to humiliate can beat you bloody but not kill you; an ambush comes as a scene beat', async () => {
   const s = start({ roll: 0 });
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 25 && !/fight is over/.test(s.store.lastTurn(s.game.id)?.response?.text ?? ''); i++) {
     s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'Coward.' }))
       .enqueue('npc_turn', npc({ dialogue: 'On your knees.', attack: { intent: 'humiliate', threat: 4, how: 'the flat of his blade' } }));
     await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
   }
-  assert.equal(s.me().health, 1);
+  assert.match(s.store.lastTurn(s.game.id)!.response!.text, /⚔ The fight is over: you are beaten/);
+  assert.ok(s.me().health >= 1 && s.me().health <= 50); // humbled, then left alone
+  assert.ok(s.me().injuries.every((i) => /bruise|blow/.test(i.text))); // the flat of a blade
   assert.equal(s.store.getCharacter(s.player.id)!.status, 'alive');
   s.store.close();
 
@@ -375,27 +417,37 @@ test('someone who only means to humiliate can beat you bloody but not kill you; 
   await t.engine.takeTurn({ gameId: t.game.id, input: 'I walk home' });
   const r = await t.engine.takeTurn({ gameId: t.game.id, input: 'I keep walking' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.match(r.text, /⚔ Vorn attacks you: decisive victory\. Vorn is beaten back\./);
+  assert.match(r.text, /⚔ A fight begins — Vorn\.\n⚔ Exchange 1 · your guard vs Vorn's [a-z ]+: clean hit on Vorn/);
+  // The fight holds the scene: no new beat while it lasts.
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 20, narration: '', actions: [move('quick')] }));
+  const r2 = await t.engine.takeTurn({ gameId: t.game.id, input: 'I go for his knees' });
+  assert.equal(r2.status, 'committed', r2.error ?? '');
+  assert.equal(r2.beat, undefined);
   t.store.close();
 });
 
 test('attacking a guarded lord: the guards stand in the way, and what you did comes back to you', async () => {
-  // A lord with guards (threat 5). Roll 0.5: the guards win — the player never reaches the lord.
+  // A lord with two guards (threat 5). Roll 0.5: the guards win the exchanges — the player yields without ever reaching the lord.
   const s = start({ roll: 0.5 });
-  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '',
-    actions: [fight('Lord Varr', { threat: 2, intent: 'kill', guards: { who: 'four House Varr guards in lamellar', threat: 5 } })] }));
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 1, narration: '',
+    actions: [fight('Lord Varr', { threat: 2, intent: 'kill', guards: { who: 'House Varr guard', count: 2, threat: 5 } })] }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I rush the lord with my knife' });
   assert.equal(r.status, 'committed', r.error ?? '');
-  assert.match(r.text, /⚔ Fight — four House Varr guards in lamellar: (stalemate|defeat|crushing defeat)[\s\S]*You never reach Lord Varr\./);
+  assert.match(r.text, /⚔ A fight begins — House Varr guard 1 \(protecting Lord Varr\), House Varr guard 2 \(protecting Lord Varr\)\./);
+  assert.match(r.text, /\n   House Varr guard 2 [a-z ]+ \(a glancing blow\)/); // the other guard strikes while you deal with the first
+  const y = await s.turn('I drop the knife and yield', { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('yield')] });
+  assert.match(y.text, /⚔ The fight is over: you yield/);
   // The world will answer: an arrest (or worse) is scheduled within minutes.
   const due = s.store.listScheduled(s.game.id, 'pending').find((i) => i.kind === 'consequence')!;
-  assert.match(String(due.payload.summary), /Rhen attacked Lord Varr and was stopped by four House Varr guards in lamellar in front of witnesses/);
+  assert.match(String(due.payload.summary), /Rhen attacked Lord Varr and was stopped by House Varr guard in front of witnesses/);
   s.store.close();
 
   // Killing a known person in public: the consequence comes due; the next beat must answer it, whatever the pace.
   const t = start({ roll: 1, beats: true });
-  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', actions: [fight('Kesh Adar')] }));
+  t.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [fight('Kesh Adar')] }));
   await t.engine.takeTurn({ gameId: t.game.id, input: 'I kill Kesh in the yard' });
+  await fightOn(t, 'strong');
+  assert.equal(t.char('Kesh Adar').status, 'dead');
   assert.ok(t.store.listScheduled(t.game.id, 'pending').some((i) => i.kind === 'consequence' && /killed Kesh Adar \(rising pit fighter sponsored by House Varr\) in front of witnesses/.test(String(i.payload.summary))));
   const guards = { name: 'Captain Ilse Maro', age: 45, gender: 'female', role: 'captain of the House Varr watch', occupation: 'watch captain', background: 'Twenty years keeping House Varr\'s order in the lower city.',
     personality: 'Cold, procedural, merciless with killers.', traits: ['cold', 'procedural'], values: ['order'], goals: ['Hang Kesh\'s killer'], fears: ['Losing face with the house'], location: 'Ashkar',
@@ -418,7 +470,7 @@ test('a lord has others do it: an attack by his guards is a fight with the guard
   s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Sarai Tul', relationHint: null }, channel: 'in_person', spokenText: 'Take your ledger and choke on it.' }))
     .enqueue('npc_turn', npc({ dialogue: 'Teach him some manners.', attack: { intent: 'humiliate', threat: 3, how: 'two guards with cudgels', by: 'her two guards' } }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult the collector' });
-  assert.match(r.text, /⚔ her two guards \(for Sarai Tul\) attack you: /);
+  assert.match(r.text, /⚔ A fight begins — her two guards \(for Sarai Tul\)\.\n⚔ Exchange 1 · your guard vs her two guards \(for Sarai Tul\)'s/);
   assert.equal(s.char('Sarai Tul').status, 'alive');
   assert.ok(s.me().health >= 1);
   s.store.close();
@@ -496,7 +548,8 @@ test('the character sheet, XP rolls, levelling up and spending points', async ()
   assert.match(sheet(), /AMBITION  to become a warrior whose name is known across the known worlds/);
   // Two big wins → level 2 (XP is rolled: base × 0.75–1.25).
   for (const foe of ['a pit veteran', 'a house sellsword']) {
-    await s.turn(`I fight ${foe}`, { intents: ['general_action'], minutesElapsed: 5, narration: '', actions: [fight(foe, { threat: 4, intent: 'duel', witnessed: true })] });
+    await s.turn(`I fight ${foe}`, { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [fight(foe, { threat: 4, intent: 'duel', witnessed: true })] });
+    await fightOn(s, 'strong');
   }
   assert.equal(s.me().level, 2);
   assert.equal(s.me().points, 1);
@@ -538,14 +591,16 @@ test('health comes from the body: 70 + strength × 10, +5 per level; more streng
 test('playtest replay: sparring with Oda leaves bruises, not surgeon-grade wounds; treatment heals; no phones; the narrator stays where the player is', async () => {
   const s = start({ roll: 0.1, narrator: true });
   const round = (n: number) => interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: `Round ${n}.`,
-    actions: [{ action: 'fight', opponent: 'Oda Venn', threat: 3, intent: 'spar', weaponName: null, witnessed: true, guards: null }] });
+    actions: [fight('Oda Venn', { intent: 'spar', weaponName: null, style: 'defensive', move: 'quick' })] });
   for (let i = 1; i <= 3; i++) {
     s.llm.enqueue('interpret', round(i)).enqueue('npc_turn', npc({ dialogue: 'Again.' })).enqueue('narrate', { prose: 'Oda circles. "Again."', suggestions: [], lines: [] });
     const r = await s.engine.takeTurn({ gameId: s.game.id, input: `round ${i}` });
     assert.equal(r.status, 'committed', r.error ?? '');
-    assert.match(r.text, /⚔ Fight — Oda Venn: sparring\./);
+    assert.match(r.text, new RegExp(`⚔ Exchange ${i} · your quick attack vs Oda Venn's guard: Oda Venn blocks and counters`));
+    assert.match(r.text, /\[you 3 \(combat 2, strength \+0\.5, bare hands \+0, padded desert coat \+0\.5\)/); // bare hands, as the player said
     assert.doesNotMatch(r.text, /cut to|deep wound|grievous/);
   }
+  assert.match(s.store.lastTurn(s.game.id)!.response!.text, /⚔ The fight is over: the sparring is over/);
   assert.ok(s.me().health >= 70, `health ${s.me().health}`); // three rounds of practice, not a knife fight
   assert.ok(s.me().injuries.every((i) => /bruise|blow/.test(i.text)));
   assert.ok(!s.store.listScheduled(s.game.id, 'pending').some((i) => i.kind === 'consequence')); // sparring answers to no one
@@ -559,9 +614,11 @@ test('playtest replay: sparring with Oda leaves bruises, not surgeon-grade wound
   assert.match(s.llm.callsFor('interpret')[0]!.system, /"I ask X, then I go home"\) does both this turn/);
 
   // A real knife cut, then a surgeon.
-  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', actions: [fight('a knife-man in the alley', { threat: 3, intent: 'drive_off' })] }))
-    .enqueue('narrate', { prose: 'Steel flashes in the dark alley.', suggestions: [], lines: [] });
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [fight('a knife-man in the alley', { threat: 3, intent: 'drive_off' })] }),
+    interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('yield')] }))
+    .enqueue('narrate', { prose: 'Steel flashes in the dark alley.', suggestions: [], lines: [] }, { prose: 'You drop the knife; he spits and is gone.', suggestions: [], lines: [] });
   await s.engine.takeTurn({ gameId: s.game.id, input: 'I fight him off' });
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I yield' });
   const hurtBefore = s.me().health;
   s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 60, narration: '', actions: [{ action: 'get_treatment', healer: 'the House surgeon', skill: 4, hours: 1 }] }))
     .enqueue('narrate', { prose: 'Needle and thread, and the smell of vinegar.', suggestions: [], lines: [] });
@@ -579,7 +636,7 @@ test('someone named by a role gets a real name; fists bruise', async () => {
   s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'Coward.' }))
     .enqueue('npc_turn', npc({ dialogue: 'Say it again.', attack: { intent: 'hurt', threat: 3, how: 'a fist to the jaw', by: null } }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
-  assert.match(r.text, /⚔ Kesh Adar attacks you: [^\n]*(bruise|blow) (on|to) the/);
+  assert.match(r.text, /⚔ Exchange 1 · your guard vs Kesh Adar's heavy attack: Kesh Adar lands a heavy blow — a bruise on the/);
   s.store.close();
 });
 
