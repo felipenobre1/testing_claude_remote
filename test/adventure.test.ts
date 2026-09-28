@@ -176,3 +176,29 @@ test('the narrator writes the opening scene of a literary world', async () => {
   assert.equal(await s.engine.openingProse(s.game.id), null); // falls back to the plain opening
   s.store.close();
 });
+
+test('playing in another language: everything the player reads is written in it; the engine stays English', async () => {
+  const store = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: adventurePack, rng: fixedRng(0.5), beats: true, narrator: true });
+  const { game } = engine.newGame({ language: 'Brazilian Portuguese' });
+  const rule = /LANGUAGE: the player plays in Brazilian Portuguese\. Write (.+?) in Brazilian Portuguese/;
+  llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: 'Me treina.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Volta amanhã cedo.' }))
+    .enqueue('narrate', { prose: 'O pátio cheira a óleo. Oda não levanta os olhos: "Volta amanhã cedo."' });
+  const r = await engine.takeTurn({ gameId: game.id, input: 'Peço para a Oda me treinar' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(llm.callsFor('interpret')[0]!.system, rule);
+  assert.match(llm.callsFor('interpret')[0]!.system.match(rule)![1]!, /narration, newSceneDescription, suggestions/);
+  assert.match(llm.callsFor('npc_turn')[0]!.system.match(rule)![1]!, /dialogue, perceivable/);
+  assert.match(llm.callsFor('narrate')[0]!.system.match(rule)![1]!, /the prose/);
+  assert.match(llm.callsFor('narrate')[0]!.system, /PLAYER'S LANGUAGE: Brazilian Portuguese/); // in the bible, for the Director too
+  // Internal instructions remain English; an English world gets no language rule at all.
+  assert.match(llm.callsFor('interpret')[0]!.system, /^You interpret one player input/);
+  const en = start({ narrator: true });
+  en.llm.enqueue('narrate', { prose: 'Grey light.' });
+  await en.engine.openingProse(en.game.id);
+  assert.doesNotMatch(en.llm.callsFor('narrate')[0]!.system, /LANGUAGE:/);
+  en.store.close();
+  store.close();
+});

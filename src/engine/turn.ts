@@ -104,9 +104,10 @@ export class Engine {
    * Quick start: create a game straight from the pack's template world (no Copilot conversation).
    * Uses the same compile → seed → create pipeline as a finalized World Creation draft.
    */
-  newGame(opts: { playerName?: string } = {}) {
+  newGame(opts: { playerName?: string; language?: string } = {}) {
     const t = this.pack.worldCreation.template;
-    const draft = opts.playerName ? { ...t, player: { ...t.player, name: opts.playerName } } : t;
+    let draft = opts.playerName ? { ...t, player: { ...t.player, name: opts.playerName } } : t;
+    if (opts.language) draft = { ...draft, style: { ...draft.style, language: opts.language } };
     const { seed, problems } = compileDraft(draft, [this.pack], { now: this.now() });
     if (!seed) throw new Error(`the pack template does not compile: ${problems.join('; ')}`);
     return createGameFromSeed(this.store, this.pack, seed, this.now());
@@ -156,7 +157,7 @@ export class Engine {
     const pack = seed.player.currency ? { ...this.pack, currency: seed.player.currency } : this.pack;
     return {
       seed, bible: bibleText(seed), pack,
-      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed), violence: seed.style.violence ?? 'non_graphic' },
+      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed), violence: seed.style.violence ?? 'non_graphic', language: seed.style.language || 'English' },
     };
   }
 
@@ -396,7 +397,7 @@ export class Engine {
 
       trace.validation = [];
       let counterTerms: Record<string, number> | null = null;
-      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background, world.ctx.violence), renderNpcBriefing(perspective, ctxInput),
+      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background, world.ctx.violence, world.ctx.language), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
           const p = validatePortrayal(out, decision);
@@ -442,7 +443,7 @@ export class Engine {
 
     // 6. The world turn: time passes for everyone, not just the player.
     trace.world = await runWorldTurn(economy, t0, plan.newGameTime, {
-      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`, bible: world.bible,
+      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`, bible: world.bible, language: world.ctx.language,
       director: this.directorEnabled
         ? (system, user) => this.callStructured<DirectorProposal>(trace, 'director', system, user, 'director', DirectorProposalSchema, DirectorProposalSchema)
         : null,

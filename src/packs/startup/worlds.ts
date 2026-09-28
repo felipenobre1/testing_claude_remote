@@ -36,7 +36,7 @@ export const STARTUP_TEMPLATE: WorldDraft = {
   style: {
     tone: 'grounded, realistic, sometimes funny', realism: 'high — real prices, real institutions, busy people who owe the player nothing',
     difficulty: 'hard; most attempts fail', narrativeStyle: 'second person, concise', playerSignificance: 'a nobody: no network, no money, no reputation yet',
-    pace: 'steady', violence: 'non_graphic', narration: 'literary',
+    pace: 'steady', violence: 'non_graphic', narration: 'literary', language: 'English',
   },
   designPrinciples: [
     'Do not manufacture destiny around the player; success must be earned.',

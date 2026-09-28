@@ -3,7 +3,7 @@ import type { Store } from '../db/store.ts';
 import { CharacterProposalSchema } from '../domain/schemas.ts';
 import type { Character } from '../domain/types.ts';
 import type { WorldSeed } from '../domain/world.ts';
-import { contentRule, type WorldContext } from './prompts.ts';
+import { contentRule, languageRule, type WorldContext } from './prompts.ts';
 import { formatGameTime } from './util.ts';
 
 // ============================================================================
@@ -68,7 +68,7 @@ Propose ONE thing that happens now and puts a real decision in front of the play
 - involves: exact names of existing living characters involved (never the player). newPerson: a new ordinary person if the moment needs one (full profile; never a real public figure); otherwise null.
 - opensConversation: if someone addresses the player directly, their name (existing or the newPerson), the channel, and their first words. null otherwise.
 - choice: the decision this forces, in one line (e.g. "Take the offered blade and the debt that comes with it, or walk away").
-- Respect the bible: pace, tone, realism, player significance. ${contentRule(world.violence, 'narrator')}
+- Respect the bible: pace, tone, realism, player significance. ${contentRule(world.violence, 'narrator')}${languageRule(world.language, 'title, perceived, choice and opensConversation.openingLine')}
 Return JSON only.`;
 }
 
@@ -125,7 +125,7 @@ Write this turn as a passage of a novel:
 - Never decide what ${playerName} does, says or feels about a choice next.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
 - Length: 2–6 paragraphs; shorter for small moments.
-- ${contentRule(world.violence, 'narrator')}
+- ${contentRule(world.violence, 'narrator')}${languageRule(world.language, 'the prose')}
 Return JSON: { "prose": "..." }`;
 }
 

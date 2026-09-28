@@ -74,7 +74,7 @@ export function compileDraft(draft: WorldDraft, packs: GamePack[], opts: { gameI
     style: {
       tone: d.style.tone!, realism: d.style.realism!, difficulty: d.style.difficulty, narrativeStyle: d.style.narrativeStyle,
       playerSignificance: d.style.playerSignificance!, designPrinciples: d.designPrinciples,
-      pace: d.style.pace ?? 'steady', violence: d.style.violence ?? 'non_graphic', narration: d.style.narration ?? 'literary',
+      pace: d.style.pace ?? 'steady', violence: d.style.violence ?? 'non_graphic', narration: d.style.narration ?? 'literary', language: d.style.language || 'English',
     },
     player: { ...d.player, name: d.player.name!, age: d.player.age!, background: d.player.background! },
     actors: d.actors,
@@ -185,6 +185,7 @@ export function bibleText(seed: WorldSeed): string {
     `TONE: ${seed.style.tone}. REALISM: ${seed.style.realism}.${seed.style.difficulty ? ` DIFFICULTY: ${seed.style.difficulty}.` : ''}${seed.style.narrativeStyle ? ` STYLE: ${seed.style.narrativeStyle}.` : ''}`,
     `PLAYER SIGNIFICANCE: ${seed.style.playerSignificance}`,
     `STORY PACE: ${paceOf(seed)}`,
+    ...(seed.style.language && !/^english$/i.test(seed.style.language) ? [`PLAYER'S LANGUAGE: ${seed.style.language} — everything the player reads (narration, dialogue, messages to the player) is in ${seed.style.language}.`] : []),
     ...(seed.player.ambition ? [`${seed.player.name.toUpperCase()}'S AMBITION: ${seed.player.ambition} — the story should keep putting opportunities, rivals, costs and hard choices on the road to it (never hand it over).`] : []),
     `VIOLENCE: ${violenceRule(seed.style.violence ?? 'non_graphic')}`,
     ...(seed.world.historicalContext ? [`RECENT HISTORY AND CONTEXT (world truth at the start): ${seed.world.historicalContext}`] : []),

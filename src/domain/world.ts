@@ -90,6 +90,7 @@ export const WorldDraftSchema = z.object({
     pace: z.enum(PACES).nullable(),
     violence: z.enum(VIOLENCE).nullable(),
     narration: z.enum(NARRATION).nullable(),
+    language: opt(40), // the language the player plays in (e.g. "Brazilian Portuguese"); the engine itself stays in English
   }),
   designPrinciples: z.array(text(240)).max(10), // e.g. "do not manufacture destiny around the player"
   worldRules: z.array(text(240)).max(10), // physics, technology or magic, institutions
@@ -136,7 +137,7 @@ export type WorldDraft = z.infer<typeof WorldDraftSchema>;
 export const EMPTY_DRAFT: WorldDraft = {
   packId: null, premise: null, sourceWorld: null, canonPolicy: null, startingStage: null,
   setting: { place: null, era: null, startDate: null, timezone: null, description: null },
-  style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null, pace: null, violence: null, narration: null },
+  style: { tone: null, realism: null, difficulty: null, narrativeStyle: null, playerSignificance: null, pace: null, violence: null, narration: null, language: null },
   designPrinciples: [], worldRules: [],
   player: { name: null, age: null, gender: null, occupation: null, background: null, personality: null, skills: [], goals: [], fears: [], ambition: null, attributes: [], location: null,
     circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [], assets: [] },
@@ -214,6 +215,7 @@ export interface WorldSeed {
     pace: (typeof PACES)[number];
     violence: (typeof VIOLENCE)[number];
     narration: (typeof NARRATION)[number];
+    language?: string; // absent in seeds created before languages existed = English
   };
   player: WorldDraft['player'] & { name: string; age: number; background: string };
   actors: WorldDraft['actors'];

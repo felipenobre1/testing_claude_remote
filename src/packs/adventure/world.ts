@@ -18,7 +18,7 @@ export const ADVENTURE_WORLD: WorldDraft = {
   style: {
     tone: 'harsh, sensual, epic but grounded', realism: 'high — wounds hurt, debts are collected, the powerful protect themselves',
     difficulty: 'hard', narrativeStyle: 'second person, present tense, like a novel: heat, dust, sweat, steel', playerSignificance: 'a nobody from the lower city with a dangerous ambition',
-    pace: 'eventful', violence: 'graphic', narration: 'literary',
+    pace: 'eventful', violence: 'graphic', narration: 'literary', language: 'English',
   },
   designPrinciples: [
     'Nothing is handed to the player: every step toward the ambition costs blood, water, loyalty or pride.',

@@ -14,7 +14,7 @@ const USAGE = `Living Story Engine
 
   npm start -- new                          design a new world with the World Creation Copilot, then play
                                             (resumes your unfinished world draft if there is one; --fresh starts over)
-  npm start -- new --quick [--pack startup|adventure|open] [--name Felipe]
+  npm start -- new --quick [--pack startup|adventure|open] [--name Felipe] [--lang "Brazilian Portuguese"]
                                             skip the conversation: start the pack's example world
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
@@ -38,7 +38,7 @@ function parseArgs(argv: string[]) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (['db', 'game', 'name', 'pack'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
+      if (['db', 'game', 'name', 'pack', 'lang'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
     } else positional.push(a);
   }
   return { flags, positional };
@@ -198,7 +198,7 @@ async function main() {
         const pack = packById((flags.pack as string) ?? 'startup');
         if (!pack) return console.error(`Unknown pack. Available: ${PACKS.map((p) => p.id).join(', ')}`);
         const engine = liveEngine(store, pack, llm);
-        const { game, opening } = engine.newGame({ playerName: flags.name as string | undefined });
+        const { game, opening } = engine.newGame({ playerName: flags.name as string | undefined, language: flags.lang as string | undefined });
         return await play(reader(), engine, game.id, Boolean(flags.debug), await narratedOpening(engine, game.id, opening));
       }
       const creation = new WorldCreation(store, llm, { packs: PACKS });

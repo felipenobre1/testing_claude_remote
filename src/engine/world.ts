@@ -29,6 +29,8 @@ export interface WorldTurnDeps {
   director: null | ((system: string, user: string) => Promise<DirectorProposal>);
   /** The game's WorldSeed design contract — given to the Director on every review so it never drifts. */
   bible: string;
+  /** The player's language: messages that reach the player are written in it. */
+  language?: string;
 }
 
 export interface WorldTurnTrace {
@@ -112,7 +114,7 @@ export async function runWorldTurn(p: WorldPlanner, from: string, to: string, de
     const seed = `${deps.seedBase}:${o.id}:${o.attempts + 1}`;
     const res = resolveDecision({ state: activePressures(state, o.nextDecisionAfter), option: { kind: o.kind, terms: o.terms }, appraisal: o.lastAppraisal as Appraisal, rng: deps.rng(seed), seed });
     const at = o.nextDecisionAfter;
-    deliverMessage(p, o.toCharacterId, replyFor(res.outcome, state), at, null);
+    deliverMessage(p, o.toCharacterId, replyFor(res.outcome, state, deps.language), at, null);
     p.applyDecision(o, res, { counter: res.counterTerms, condition: null, counterNote: 'what they could accept instead', appraisal: o.lastAppraisal });
     trace.deferred.push({ offerId: o.id, outcome: res.outcome, roll: res.roll });
   }
@@ -198,7 +200,16 @@ export function deliverMessage(p: WorldPlanner, fromId: string, text: string, at
   p.results.push(`📱 ${formatGameTime(at)} — ${p.name(fromId)}: “${text}”`);
 }
 
-function replyFor(outcome: Outcome, state: DecisionState): string {
+/** Short replies when someone gets back to the player about an offer (the only fixed player-facing words in the engine). */
+const REPLIES_PT: Record<Outcome, string> = {
+  accept: 'Pensei bem. Ok — vamos fazer.', accept_conditionally: 'Ok, eu topo — mas tenho uma condição. Vamos conversar.',
+  counter: 'Pensei bem. Nesses termos não — mas posso fazer outra proposta.', escalate_to_decision_maker: 'Levei isso adiante. Ainda estou esperando uma resposta, desculpa.',
+  request_more_information: 'Preciso de mais detalhes antes de decidir.', delay: 'Ainda estou pensando. Me dá mais uns dias.',
+  reject: 'Pensei bem — vou passar. Desculpa.', disengage: 'Não tenho interesse. Não conte comigo para isso.',
+};
+
+function replyFor(outcome: Outcome, state: DecisionState, language = 'English'): string {
+  if (/portugu/i.test(language)) return REPLIES_PT[outcome];
   switch (outcome) {
     case 'accept': return "I've thought about it. Ok — let's do it.";
     case 'accept_conditionally': return "Ok, I'm in — but I have a condition. Let's talk.";
@@ -271,6 +282,7 @@ Propose at most two NEW situations (story threads) and any ESCALATIONS of existi
 - messageToPlayer: only if that person would plausibly tell the player; otherwise null (the player may never find out).
 - Respect the bible: its tone, realism, player significance and design principles hold even if the player later becomes powerful.
 - Follow the STORY PACE in the bible. quiet: most of the time the right answer is no new thread. steady: a new situation every few days. eventful: most days something new develops, preferably involving the player or touching their ambition (a challenge, a patron, a rival's move, a debt called in).
+- messageToPlayer is read by the player: write it in the PLAYER'S LANGUAGE from the bible (English if none).
 - Situations involving the player still need another actor who decides; the player's own choices are theirs. Return JSON only.`;
 }
 
