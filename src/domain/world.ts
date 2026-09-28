@@ -30,6 +30,7 @@ const opt = (max: number) => z.string().max(max).nullable();
 const DraftActorSchema = z.strictObject({
   name: z.string().min(1).max(80),
   age: z.number().int().min(1).max(120).nullable(),
+  gender: opt(40), // so everyone refers to them the same way
   role: text(120), // their place in the world
   description: text(600), // who they are
   personality: opt(400),

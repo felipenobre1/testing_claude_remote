@@ -320,7 +320,7 @@ test('playtest export: what the player typed and saw, what the engine decided, r
   assert.match(md, /STORY PACE: eventful/);
   assert.match(md, /\*\*Player:\*\* I floor the thug/);
   assert.match(md, /⚔ Fight — a drunk dock thug: decisive victory/);
-  assert.match(md, /- model calls: interpret ✗ output was not valid JSON · interpret#2/);
+  assert.match(md, /- model calls: interpret( [\d.]+s)? ✗ output was not valid JSON · interpret#2/);
   assert.match(md, /\| interpret \| 2 \| 1 \|/);
   assert.doesNotMatch(md, /\*\*Prompt:\*\*/); // prompts only with --full
   assert.match(exportPlaytest(s.store, s.game.id, { full: true }), /\*\*Prompt:\*\*/);
@@ -532,5 +532,53 @@ test('health comes from the body: 70 + strength × 10, +5 per level; more streng
   advRepo.saveProfile(s.store, { ...p, points: 3 });
   assert.equal(adventurePack.commands!.spend!.run(s.store, s.game.id, ['strength'], 'en'), '✓ strength → 4 · 0 points left');
   assert.deepEqual([s.me().maxHealth, s.me().health], [110, 110]);
+  s.store.close();
+});
+
+test('playtest replay: sparring with Oda leaves bruises, not surgeon-grade wounds; treatment heals; no phones; the narrator stays where the player is', async () => {
+  const s = start({ roll: 0.1, narrator: true });
+  const round = (n: number) => interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: `Round ${n}.`,
+    actions: [{ action: 'fight', opponent: 'Oda Venn', threat: 3, intent: 'spar', weaponName: null, witnessed: true, guards: null }] });
+  for (let i = 1; i <= 3; i++) {
+    s.llm.enqueue('interpret', round(i)).enqueue('npc_turn', npc({ dialogue: 'Again.' })).enqueue('narrate', { prose: 'Oda circles. "Again."', suggestions: [], lines: [] });
+    const r = await s.engine.takeTurn({ gameId: s.game.id, input: `round ${i}` });
+    assert.equal(r.status, 'committed', r.error ?? '');
+    assert.match(r.text, /⚔ Fight — Oda Venn: sparring\./);
+    assert.doesNotMatch(r.text, /cut to|deep wound|grievous/);
+  }
+  assert.ok(s.me().health >= 70, `health ${s.me().health}`); // three rounds of practice, not a knife fight
+  assert.ok(s.me().injuries.every((i) => /bruise|blow/.test(i.text)));
+  assert.ok(!s.store.listScheduled(s.game.id, 'pending').some((i) => i.kind === 'consequence')); // sparring answers to no one
+  assert.equal(s.me().fame, 1);
+  // Everyone knows who Oda is: the narrator is told her gender, the place, and not to move the player.
+  const narr = s.llm.callsFor('narrate').at(-1)!;
+  assert.match(narr.user, /PEOPLE HERE: Oda Venn \(pit trainer in the Cisterns quarter, female\)/);
+  assert.match(narr.user, /WHERE THE READER IS AT THE END: /);
+  assert.match(narr.system, /Never move the reader or let time pass beyond THE FACTS/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /if the world has none, never use phone/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /"I ask X, then I go home"\) does both this turn/);
+
+  // A real knife cut, then a surgeon.
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: '', actions: [fight('a knife-man in the alley', { threat: 3, intent: 'drive_off' })] }))
+    .enqueue('narrate', { prose: 'Steel flashes in the dark alley.', suggestions: [], lines: [] });
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I fight him off' });
+  const hurtBefore = s.me().health;
+  s.llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 60, narration: '', actions: [{ action: 'get_treatment', healer: 'the House surgeon', skill: 4, hours: 1 }] }))
+    .enqueue('narrate', { prose: 'Needle and thread, and the smell of vinegar.', suggestions: [], lines: [] });
+  const t = await s.engine.takeTurn({ gameId: s.game.id, input: 'the surgeon stitches me' });
+  assert.equal(t.status, 'committed', t.error ?? '');
+  assert.match(t.text, new RegExp(`🩹 Treated by the House surgeon: health ${hurtBefore} → ${Math.min(100, hurtBefore + 22)}`));
+  assert.ok(s.me().injuries.every((i) => i.severity === 'light'));
+  s.store.close();
+});
+
+test('someone named by a role gets a real name; fists bruise', async () => {
+  const s = start({ roll: 0 });
+  assert.match((await import('../src/engine/prompts.ts')).generateSystemPrompt({ line: 'x', rules: [], homes: 'x', background: null, violence: 'graphic', language: 'English' }),
+    /If what was requested is a role or label rather than a name \("the surgeon", "o cirurgião"/);
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'Coward.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Say it again.', attack: { intent: 'hurt', threat: 3, how: 'a fist to the jaw', by: null } }));
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
+  assert.match(r.text, /⚔ Kesh Adar attacks you: [^\n]*(bruise|blow) (on|to) the/);
   s.store.close();
 });

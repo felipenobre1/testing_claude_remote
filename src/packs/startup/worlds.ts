@@ -65,10 +65,10 @@ export const STARTUP_TEMPLATE: WorldDraft = {
     }],
   },
   actors: [
-    { name: 'Carla Bianchi', age: 49, role: "Felipe's mother", description: 'Pharmacist in Città Studi. Practical, loving, worried about her son drifting.',
+    { name: 'Carla Bianchi', age: 49, gender: 'female', role: "Felipe's mother", description: 'Pharmacist in Città Studi. Practical, loving, worried about her son drifting.',
       personality: 'Warm but direct; asks concrete questions; hates vague answers.', goals: ['See Felipe enrolled somewhere or earning a living'],
       relationshipToPlayer: 'Her son. Proud he builds things, afraid he is wasting a year on a hobby. Wants a real answer by 15 October.' },
-    { name: 'Giorgio Bianchi', age: 52, role: "Felipe's father", description: 'Accountant at a logistics company. Careful with money; sceptical of "startups".',
+    { name: 'Giorgio Bianchi', age: 52, gender: 'male', role: "Felipe's father", description: 'Accountant at a logistics company. Careful with money; sceptical of "startups".',
       personality: 'Quiet, dry humour, numbers-first.', goals: ['Keep the family finances steady'],
       relationshipToPlayer: 'His son. Pays his pocket money. Thinks Grade Economy is a nice project but not a job.' },
   ],

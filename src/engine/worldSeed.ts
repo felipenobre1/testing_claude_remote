@@ -101,7 +101,7 @@ export function createGameFromSeed(store: Store, pack: GamePack, seed: WorldSeed
     packId: pack.id, revision: 0, createdAt: now, updatedAt: now,
   };
   const actors: Character[] = seed.actors.map((a) => ({
-    id: newId('chr'), gameId, isPlayer: false, name: a.name, age: a.age ?? 35, gender: null, role: a.role, occupation: a.role, background: a.description,
+    id: newId('chr'), gameId, isPlayer: false, name: a.name, age: a.age ?? 35, gender: a.gender ?? null, role: a.role, occupation: a.role, background: a.description,
     personality: a.personality ?? a.description, traits: [], values: [], goals: a.goals, fears: [], location: seed.world.place, origin: 'seed',
     createdAt: now, updatedAt: now,
   }));

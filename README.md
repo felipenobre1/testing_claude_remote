@@ -93,6 +93,8 @@ These are generic engine features. Each world sets them at creation (`style.pace
 For fantasy and science-fantasy worlds, including a known universe used as reference (Dune-like and so on). Quick start: `npm start -- new --quick --pack adventure` (Rhen, a pit fighter in the original desert city of Ashkar, with a water-debt and an ambition). Or design your own world with the Copilot.
 
 - **fight:** the engine decides. Your combat skill, weapon and armour quality and wounds go against the opponent's threat (or a known person's recorded skill), plus a bounded seeded roll. Outcomes: decisive victory, victory at a cost, stalemate, defeat, crushing defeat. Intent `kill` kills a named person for good. Wounds are light, serious or critical, on a body part. Fighting builds combat practice. Winning in front of witnesses builds fame.
+- **Sparring** (`fight` intent `spar`): agreed practice bouts leave bruises, not wounds. Nobody dies, there's no fame or consequence, and XP is halved. Wounds depend on what hit you: fists, clubs and training weapons bruise and crack; blades cut.
+- **get_treatment:** a healer or surgeon closes wounds (serious becomes light) and restores health by their skill. Payment is a separate pay or deal.
 - **attempt:** risky feats (climb, sneak, persuade, survive) from a skill (combat, stealth, survival, athletics, persuasion, lore; 0–5) against a difficulty; failure costs what was risked.
 - **rest** heals (serious wounds need care). **train** with or without a teacher. **acquire_item** / **part_with_item** handle weapons, armour, gear and valuables, with purchases paid from the ledger.
 - **The character sheet** (`/sheet`, in the player's language):

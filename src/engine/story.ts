@@ -167,6 +167,8 @@ Write this turn as a passage of a novel:
 - Everything in THE FACTS OF THIS TURN is decided and true. Narrate it faithfully: never change, soften or add outcomes (who wins, who dies, what is found, what is paid), never invent numbers. You may show HOW it happened.
 - Quote every line of dialogue listed under WORDS SPOKEN exactly as written (you may add who says it, how, gestures around it). Do not invent other dialogue for anyone.
 - Never decide what ${playerName} does, says or feels about a choice next.
+- Never move the reader or let time pass beyond THE FACTS: the passage ends where WHERE THE READER IS AT THE END says, at that time. Do not narrate a departure, a journey or an arrival the facts don't contain. If the reader only said they will go somewhere, they have not gone yet.
+- Characters keep their gender (see PEOPLE HERE); refer to each person the same way every time.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
 - Length follows the moment: an exchange of words = one short paragraph around the dialogue; an action with consequences = 1–3 paragraphs; a new place or a big event = up to 5.
 - ${contentRule(world.violence, 'narrator')}
@@ -190,6 +192,8 @@ export interface NarratorInput {
   words: { speaker: string; text: string; how: string }[];
   conversationEnded: boolean;
   choice: string | null;
+  endLocation?: string; // where the reader is when the passage ends (canonical)
+  people?: string[]; // "Name (role, gender)" for everyone in the scene
   resultLines?: string[]; // the game's result lines, to be rendered in the player's language
   previousIdeas?: string[];
   previousPassage?: string; // what the reader read last turn (for continuity; never repeated)
@@ -211,6 +215,8 @@ export function narratorUserPrompt(n: NarratorInput): string {
     'WORDS SPOKEN (quote exactly):', ...(n.words.length ? n.words.map((w) => `- ${w.speaker}${w.how ? ` (${w.how})` : ''}: "${w.text}"`) : ['- (none)']),
     ...(n.conversationEnded ? ['The conversation ends here.'] : []),
     ...(n.choice ? [`THE DECISION NOW IN FRONT OF THE PLAYER: ${n.choice}`] : []),
+    ...(n.people?.length ? [`PEOPLE HERE: ${n.people.join('; ')}`] : []),
+    ...(n.endLocation ? [`WHERE THE READER IS AT THE END: ${n.endLocation}`] : []),
     ...(n.previousIdeas?.length ? [`PREVIOUS IDEAS (do not repeat): ${n.previousIdeas.join(' · ')}`] : []),
     ...(n.resultLines?.length ? ['THE RESULT LINES (the game shows these under your passage):', ...n.resultLines.map((l, i) => `${i + 1}. ${l}`)] : []),
   ].join('\n');

@@ -47,7 +47,8 @@ Split the input into what is observable and what is private:
 - visibleAction: physical actions that someone physically present could see. null if none.
 - privateThought: anything only in ${playerName}'s head — thoughts, plans, feelings not expressed. null if none. NEVER put private thoughts into spokenText.
 - target: the person ${playerName} contacts or talks to this turn. If they are one of the KNOWN CHARACTERS (by name or by relation, e.g. "my friend"), use that exact name. If it is someone new, give the name as written (or a short label like "Mom" if unnamed) and a relationHint such as "friend", "mother", "classmate". If ${playerName} keeps talking in the open conversation, use that person's name. null if nobody.
-- channel: phone / in_person / message when ${playerName} starts contacting someone; null otherwise.
+- channel: in_person / phone / message when ${playerName} starts contacting someone; null otherwise. phone = any live voice at a distance that EXISTS in this world (telephone, radio, a scrying mirror); if the world has none, never use phone. message = a text, a letter, a note, a messenger. Visiting someone — even a professional in their room — is in_person.
+- A player who says what they will do after the other person answers ("I ask X, then I go home") does both this turn: spokenText AND the move (newLocation, end_conversation). The other person answers before the player leaves.
 - intents: every intent present: start_conversation, speak, private_thought, end_conversation, general_action.
 - newLocation: only when ${playerName} moves somewhere (e.g. "Home — kitchen"). null otherwise.
 - newSceneDescription: when newLocation is set, one or two sentences describing what is there now (only plausible, ordinary details; objects left behind stay behind). null otherwise.
@@ -130,7 +131,7 @@ OUTPUT (JSON)
 export function generateSystemPrompt(world: WorldContext): string {
   return `You create a new fictional person for a persistent living world: ${world.line}.${backgroundBlock(world.background)}
 The person must be an ordinary, plausible individual — not a caricature, not a real public figure, not suspiciously convenient for the player.
-Use exactly the requested name (if only a first name is given, add a plausible surname). Fit the stated relationship to the player.
+Use exactly the requested name (if only a first name is given, add a plausible surname). If what was requested is a role or label rather than a name ("the surgeon", "o cirurgião", "Mom", "a guard"), invent a proper name that fits the world and put the label in role. Fit the stated relationship to the player.
 Do NOT invent specific shared scenes or episodes with the player, secrets about the player, or anything about the player beyond the public profile given.
 relationshipToPlayer: how THIS person sees the player, in general terms from their own point of view (how they know each other, how close they are, what they think of them). No specific episodes.
 location: where they live (${world.homes}). Return JSON only.`;

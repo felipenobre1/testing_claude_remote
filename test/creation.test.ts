@@ -34,7 +34,7 @@ const DESERT: WorldDraft = {
   player: { ...EMPTY_DRAFT.player, name: 'Kaleb', age: 17, occupation: 'water-seller\'s apprentice', background: 'Born in the lower city; apprenticed to a water-seller since age ten.',
     skills: ['haggling'], goals: ['buy his own water license'], circumstances: ['sleeps in the master\'s storeroom', 'owes the master two years of work'],
     startingMoney: 30, currency: { code: 'SOL', symbol: 'S ' }, possessions: ['a stillsuit, patched'] },
-  actors: [{ name: 'Old Harun', age: 64, role: 'water-seller, Kaleb\'s master', description: 'Tight-fisted, honest by his own measure.', personality: 'gruff',
+  actors: [{ name: 'Old Harun', age: 64, gender: 'male', role: 'water-seller, Kaleb\'s master', description: 'Tight-fisted, honest by his own measure.', personality: 'gruff',
     goals: ['keep his license'], relationshipToPlayer: 'His apprentice: useful, cheeky, not yet trustworthy with money.' }],
   historicalContext: 'Two years of drought; the ruling house doubled the water tax last spring and closed the free fountains.',
   currentSituation: 'Water rations were cut again this week; the garrison is searching houses for hoarded water.',

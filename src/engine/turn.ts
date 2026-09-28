@@ -499,6 +499,10 @@ export class Engine {
         gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
         input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
         facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
+        endLocation: plan.scene.location,
+        people: [...new Set([...(interaction?.participantIds ?? []), ...plan.scene.activeCharacterIds])].filter((id) => id !== player.id)
+          .map((id) => economy.ctx.characters.find((c) => c.id === id) ?? plan.extraCharacters.find((x) => x.character.id === id)?.character)
+          .filter((c): c is Character => Boolean(c)).map((c) => `${c.name} (${c.role}${c.gender ? `, ${c.gender}` : ''})`),
         words, conversationEnded, choice: economy.ctx.player.status === 'dead' ? `None — ${player.name} is dead. Write the death; this is the last passage of the story.` : beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
         resultLines: localized(world.ctx.language) ? results : [],
       });
