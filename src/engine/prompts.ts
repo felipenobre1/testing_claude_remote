@@ -6,14 +6,18 @@ export interface WorldContext {
   line: string; // e.g. "Milan, September 2026; tone: grounded; realism: brutal"
   rules: string[];
   homes: string; // where new people plausibly live
+  /** Shared background everyone in the world knows (recent history, the state of things), from the WorldSeed. */
+  background: string | null;
 }
+
+const backgroundBlock = (bg: string | null) => (bg ? `\nBACKGROUND everyone here knows (recent history and the state of things): ${bg}\n` : '');
 import { formatGameTime } from './util.ts';
 
 // System prompts are static per task; everything situational goes in the user prompt,
 // which is built by the Context Builder and stored verbatim in the turn trace.
 
 export function interpretSystemPrompt(playerName: string, pack: GamePack, world: WorldContext): string {
-  return `You interpret one player input in a persistent living world: ${world.line}.${world.rules.length ? `\nWorld rules: ${world.rules.join('; ')}.` : ''}
+  return `You interpret one player input in a persistent living world: ${world.line}.${world.rules.length ? `\nWorld rules: ${world.rules.join('; ')}.` : ''}${backgroundBlock(world.background)}
 The player controls ${playerName}. You do NOT play any other character: never write another person's words, reactions or whether they answer.
 
 Split the input into what is observable and what is private:
@@ -48,8 +52,8 @@ ${pack.prompts.interpretActions}
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;
 }
 
-export function npcSystemPrompt(npc: Character, world: string): string {
-  return `You are ${npc.name}, one character in a realistic, persistent living world set in ${world}. Stay fully in character.
+export function npcSystemPrompt(npc: Character, world: string, background: string | null = null): string {
+  return `You are ${npc.name}, one character in a realistic, persistent living world set in ${world}. Stay fully in character.${backgroundBlock(background)}
 
 YOU ARE NOT AN ASSISTANT
 You are a person in this world. Do not optimize for helping the player succeed.
@@ -97,7 +101,7 @@ OUTPUT (JSON)
 }
 
 export function generateSystemPrompt(world: WorldContext): string {
-  return `You create a new fictional person for a persistent living world: ${world.line}.
+  return `You create a new fictional person for a persistent living world: ${world.line}.${backgroundBlock(world.background)}
 The person must be an ordinary, plausible individual — not a caricature, not a real public figure, not suspiciously convenient for the player.
 Use exactly the requested first name (add a plausible surname). Fit the stated relationship to the player.
 Do NOT invent specific shared scenes or episodes with the player, secrets about the player, or anything about the player beyond the public profile given.

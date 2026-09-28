@@ -36,6 +36,7 @@ const DESERT: WorldDraft = {
     startingMoney: 30, currency: { code: 'SOL', symbol: 'S ' }, possessions: ['a stillsuit, patched'] },
   actors: [{ name: 'Old Harun', age: 64, role: 'water-seller, Kaleb\'s master', description: 'Tight-fisted, honest by his own measure.', personality: 'gruff',
     goals: ['keep his license'], relationshipToPlayer: 'His apprentice: useful, cheeky, not yet trustworthy with money.' }],
+  historicalContext: 'Two years of drought; the ruling house doubled the water tax last spring and closed the free fountains.',
   currentSituation: 'Water rations were cut again this week; the garrison is searching houses for hoarded water.',
   initialPressures: ['The master wants the debt worked off before any wages.'],
   initialSituations: [{ title: 'Harun\'s license renewal', summary: 'Harun\'s water license is up for renewal and the new inspector wants a bribe.', involves: ['Old Harun'] }],
@@ -230,6 +231,10 @@ test('pack reuse: a Dune-like world plays on the Open World pack; the Director i
   assert.match(director, /PLAYER SIGNIFICANCE: insignificant: an apprentice nobody at court has heard of/);
   assert.match(director, /- Great houses never notice the player without a concrete reason\./);
   assert.match(director, /Canon policy: alternate from start/);
+  // The recent history agreed at creation is shared world truth: the Director, NPCs and the interpreter all see it.
+  assert.match(director, /RECENT HISTORY AND CONTEXT \(world truth at the start\): Two years of drought/);
+  assert.match(s.llm.callsFor('npc_turn')[0]!.system, /BACKGROUND everyone here knows[^\n]*doubled the water tax/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /BACKGROUND everyone here knows[^\n]*closed the free fountains/);
   s.store.close();
 });
 

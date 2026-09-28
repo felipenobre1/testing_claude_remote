@@ -183,9 +183,17 @@ export function bibleText(seed: WorldSeed): string {
     `WORLD: ${seed.world.place}, ${seed.world.era}${seed.world.sourceWorld ? ` (source: ${seed.world.sourceWorld})` : ''}. Canon policy: ${seed.world.canonPolicy.replace(/_/g, ' ')}.`,
     `TONE: ${seed.style.tone}. REALISM: ${seed.style.realism}.${seed.style.difficulty ? ` DIFFICULTY: ${seed.style.difficulty}.` : ''}${seed.style.narrativeStyle ? ` STYLE: ${seed.style.narrativeStyle}.` : ''}`,
     `PLAYER SIGNIFICANCE: ${seed.style.playerSignificance}`,
+    ...(seed.world.historicalContext ? [`RECENT HISTORY AND CONTEXT (world truth at the start): ${seed.world.historicalContext}`] : []),
     ...(seed.style.designPrinciples.length ? ['DESIGN PRINCIPLES (binding for the whole game):', ...seed.style.designPrinciples.map((x) => `- ${x}`)] : []),
     ...(seed.world.rules.length ? ['WORLD RULES:', ...seed.world.rules.map((x) => `- ${x}`)] : []),
   ].join('\n');
+}
+
+/** What everyone in the world knows: the recent history agreed at creation (kept short for in-scene prompts). */
+export function backgroundOf(seed: WorldSeed, max = 700): string | null {
+  const h = seed.world.historicalContext?.trim();
+  if (!h) return null;
+  return h.length <= max ? h : `${h.slice(0, max - 1)}…`;
 }
 
 /** Short setting line for in-scene prompts. */

@@ -24,7 +24,7 @@ import { applyOps, npcThreadsBriefing, npcWorldBriefing, playerWorldBriefing, Wo
 import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
-import { bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
+import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
@@ -113,7 +113,7 @@ export class Engine {
     const pack = seed.player.currency ? { ...this.pack, currency: seed.player.currency } : this.pack;
     return {
       seed, bible: bibleText(seed), pack,
-      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}` },
+      ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed) },
     };
   }
 
@@ -347,7 +347,7 @@ export class Engine {
 
       trace.validation = [];
       let counterTerms: Record<string, number> | null = null;
-      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line), renderNpcBriefing(perspective, ctxInput),
+      npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
           const p = validatePortrayal(out, decision);
