@@ -1,4 +1,4 @@
-import { createInterface } from 'node:readline/promises';
+import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import { Store } from './db/store.ts';
 import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatWorld, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
@@ -75,12 +75,51 @@ function liveEngine(store: Store, pack: GamePack, llm: LLMProvider): Engine {
 }
 
 /** The World Creation conversation. Returns the created game, or null if the player left or abandoned. */
-async function design(creation: WorldCreation, draftId: string, intro: string): Promise<CreationResult | null> {
-  console.log(`\n${intro}\n\n(/draft shows what's decided · /quit saves the draft for later)\n`);
+/**
+ * One reader for the whole session. Lines typed while the model is working are queued, not lost
+ * (readline drops lines that arrive while no question is pending).
+ */
+function lineReader() {
   const rl = createInterface({ input: stdin, output: stdout });
+  const queue: string[] = [];
+  let waiter: ((line: string | null) => void) | null = null;
+  let closed = false;
+  rl.on('line', (l) => { if (waiter) { const w = waiter; waiter = null; w(l); } else queue.push(l); });
+  rl.on('close', () => { closed = true; waiter?.(null); waiter = null; });
+  return {
+    next(prompt: string): Promise<string | null> {
+      if (queue.length) { const l = queue.shift()!; stdout.write(`${prompt}${l}\n`); return Promise.resolve(l); }
+      if (closed) return Promise.resolve(null);
+      rl.setPrompt(prompt);
+      rl.prompt();
+      return new Promise((r) => { waiter = r; });
+    },
+    close: () => rl.close(),
+  };
+}
+type Reader = ReturnType<typeof lineReader>;
+
+/** Shows a live timer while the model works, so a slow reply never looks like a freeze. */
+async function working<T>(label: string, p: Promise<T>): Promise<T> {
+  const t0 = Date.now();
+  const tick = () => stdout.write(`\r⏳ ${label}… ${Math.round((Date.now() - t0) / 1000)}s (you can type ahead)`);
+  tick();
+  const timer = setInterval(tick, 1000);
   try {
+    return await p;
+  } finally {
+    clearInterval(timer);
+    stdout.write('\r\x1b[K');
+  }
+}
+
+async function design(reader: Reader, creation: WorldCreation, draftId: string, intro: string): Promise<CreationResult | null> {
+  console.log(`\n${intro}\n\n(/draft shows what's decided · /finalize shows the final summary · /quit saves the draft for later)\n`);
+  {
     for (;;) {
-      const line = (await rl.question('world> ')).trim();
+      const raw = await reader.next('world> ');
+      if (raw === null) return null;
+      const line = raw.trim();
       if (!line) continue;
       let r: CreationResult;
       if (line === '/quit' || line === '/exit') { console.log('Draft saved. Resume it with: npm start -- new'); return null; }
@@ -89,9 +128,8 @@ async function design(creation: WorldCreation, draftId: string, intro: string): 
       else if (line === '/approve') r = creation.approve(draftId);
       else if (line === '/abandon') r = creation.abandon(draftId);
       else {
-        process.stdout.write('…\r');
         try {
-          r = await creation.say(draftId, line);
+          r = await working('the Copilot is thinking', creation.say(draftId, line));
         } catch (e) {
           console.log(`(the Copilot failed: ${(e as Error).message} — your draft is unchanged; try again)\n`);
           continue;
@@ -100,18 +138,17 @@ async function design(creation: WorldCreation, draftId: string, intro: string): 
       console.log(`\n${r.text}\n`);
       if (r.status === 'finalized' || r.status === 'abandoned') return r.status === 'finalized' ? r : null;
     }
-  } finally {
-    rl.close();
   }
 }
 
-async function play(engine: Engine, gameId: string, debug: boolean, intro: string) {
+async function play(reader: Reader, engine: Engine, gameId: string, debug: boolean, intro: string) {
   const store = engine.store;
   console.log(`\n${intro}\n\n(game ${gameId} — /quit to leave; everything is saved after each turn)\n\n${formatStatusLine(store, gameId)}\n`);
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
+  {
     for (;;) {
-      const line = (await rl.question('> ')).trim();
+      const raw = await reader.next('> ');
+      if (raw === null) break;
+      const line = raw.trim();
       if (!line) continue;
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
@@ -121,14 +158,11 @@ async function play(engine: Engine, gameId: string, debug: boolean, intro: strin
         console.log(inspect(store, gameId, parts.filter((p) => p !== '--full'), parts.includes('--full')));
         continue;
       }
-      process.stdout.write('…\r');
-      const r = await engine.takeTurn({ gameId, input: line });
+      const r = await working('the world is moving', engine.takeTurn({ gameId, input: line }));
       console.log(`\n${r.text}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
     }
-  } finally {
-    rl.close();
   }
 }
 
@@ -139,6 +173,8 @@ async function main() {
   if (!cmd || cmd === 'help' || flags.help) return console.log(USAGE);
 
   const store = new Store(dbPath);
+  let shared: Reader | null = null;
+  const reader = () => (shared ??= lineReader());
   try {
     const latest = () => store.listGames()[0]?.id;
     if (cmd === 'new') {
@@ -149,7 +185,7 @@ async function main() {
         if (!pack) return console.error(`Unknown pack. Available: ${PACKS.map((p) => p.id).join(', ')}`);
         const engine = liveEngine(store, pack, llm);
         const { game, opening } = engine.newGame({ playerName: flags.name as string | undefined });
-        return await play(engine, game.id, Boolean(flags.debug), opening);
+        return await play(reader(), engine, game.id, Boolean(flags.debug), opening);
       }
       const creation = new WorldCreation(store, llm, { packs: PACKS });
       const open = flags.fresh ? undefined : creation.latestOpen();
@@ -161,10 +197,10 @@ async function main() {
       } else {
         ({ draftId, text: intro } = creation.start());
       }
-      const created = await design(creation, draftId, intro);
+      const created = await design(reader(), creation, draftId, intro);
       if (!created?.gameId) return;
       const game = store.getGame(created.gameId)!;
-      await play(liveEngine(store, packById(game.packId)!, llm), game.id, Boolean(flags.debug), created.opening!);
+      await play(reader(), liveEngine(store, packById(game.packId)!, llm), game.id, Boolean(flags.debug), created.opening!);
     } else if (cmd === 'continue') {
       const gameId = rest[0] ?? latest();
       if (!gameId || !store.getGame(gameId)) return console.error('No game to continue. Start one with: npm start -- new');
@@ -174,7 +210,7 @@ async function main() {
       if (!llm) return;
       const engine = liveEngine(store, pack, llm);
       const last = store.listTurns(gameId).filter((t) => t.status === 'committed').at(-1);
-      await play(engine, gameId, Boolean(flags.debug), `${formatStatus(store, gameId)}${last?.response ? `\n\nLast time:\n${last.response.text}` : ''}`);
+      await play(reader(), engine, gameId, Boolean(flags.debug), `${formatStatus(store, gameId)}${last?.response ? `\n\nLast time:\n${last.response.text}` : ''}`);
     } else if (cmd === 'games') {
       console.log(store.listGames().map((g) => `${g.id}  [${g.packId}]  ${g.title}  ${g.gameTime}  rev ${g.revision}`).join('\n') || '(no games)');
     } else if (cmd === 'drafts') {
@@ -187,6 +223,7 @@ async function main() {
       console.log(USAGE);
     }
   } finally {
+    (shared as Reader | null)?.close();
     store.close();
   }
 }

@@ -11,8 +11,9 @@ import { PACKS } from '../src/packs/index.ts';
 import { openPack } from '../src/packs/open/index.ts';
 import { interp, lastPrompt, npc, tmpDbPath } from './helpers.ts';
 
+/** A scripted Copilot turn that sets every top-level field to the given draft's value. */
 const reply = (draft: WorldDraft, text = 'Noted.', intent: CopilotTurn['intent'] = 'discuss', approvalQuote: string | null = null): CopilotTurn =>
-  ({ reply: text, draft, intent, approvalQuote });
+  ({ reply: text, updates: Object.entries(draft).map(([path, v]) => ({ path, value: JSON.stringify(v) })), intent, approvalQuote });
 
 const count = (store: Store, table: string) => (store.get(`SELECT COUNT(*) AS n FROM ${table}`) as { n: number }).n;
 const CANONICAL = ['games', 'characters', 'events', 'facts', 'relationships', 'accounts', 'story_threads', 'world_seeds'];
@@ -240,4 +241,19 @@ test('quick start compiles the pack template through the same seed pipeline', ()
   assert.equal(store.getWorldSeed<WorldSeed>(game.id)!.draftId, null);
   assert.equal(count(store, 'world_drafts'), 0);
   store.close();
+});
+
+test('the Copilot sends only changes; a bad path or value is sent back for correction, never half-applied', async () => {
+  const s = setup();
+  const { draftId } = s.creation.start();
+  s.llm.enqueue('world_copilot',
+    { reply: 'x', updates: [{ path: 'player.name', value: '"Kaleb"' }, { path: 'player.nickname', value: '"K"' }], intent: 'discuss', approvalQuote: null },
+    { reply: 'Kaleb, then.', updates: [{ path: 'player.name', value: '"Kaleb"' }, { path: 'setting.place', value: '"Arrakeen"' }], intent: 'discuss', approvalQuote: null });
+  const r = await s.creation.say(draftId, 'I am Kaleb, in Arrakeen');
+  assert.equal(r.text, 'Kaleb, then.');
+  assert.match(lastPrompt(s.llm, 'world_copilot'), /YOUR PREVIOUS OUTPUT WAS REJECTED:\n- updates: "player\.nickname" is not a field of the draft/);
+  const d = s.creation.draft(draftId);
+  assert.deepEqual([d.player.name, d.setting.place, d.player.age], ['Kaleb', 'Arrakeen', null]);
+  assert.equal(s.store.getDraft(draftId)!.version, 1);
+  s.store.close();
 });

@@ -51,7 +51,7 @@ npm run smoke                 # live multi-session run incl. a Copilot conversat
 
 The database defaults to `data/startup.db`. Override it with `--db <path>` or `STARTUP_DB`.
 
-You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (medium).
+You can also set reasoning effort per task: `OPENAI_EFFORT_INTERPRET` (low), `OPENAI_EFFORT_GENERATE` (low), `OPENAI_EFFORT_NPC` (medium) and `OPENAI_EFFORT_COPILOT` (low).
 
 ## The starting position, money and the week
 

@@ -1,5 +1,5 @@
 import type { DraftRow, Store } from '../db/store.ts';
-import { CopilotTurnSchema, EMPTY_DRAFT, WorldDraftSchema, type CopilotTurn, type WorldDraft } from '../domain/world.ts';
+import { applyDraftUpdates, CopilotTurnSchema, EMPTY_DRAFT, WorldDraftSchema, type CopilotTurn, type WorldDraft } from '../domain/world.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { GamePack } from '../packs/types.ts';
 import { newId } from './util.ts';
@@ -54,7 +54,8 @@ HOW TO WORK
 - Replies are short and conversational (a few sentences). No headings, no forms.
 
 THE DRAFT
-Return the COMPLETE updated draft every turn. Keep everything already decided unless the player changes it; when they revise something, update only that part and anything that depends on it. When they reset part of it ("forget the family", "start the setting over"), set those fields back to null/empty.
+Send ONLY what changes, as updates: [{ path, value }]. path is a dot path into CURRENT DRAFT (e.g. "premise", "player.name", "setting.startDate", "player.assets", "economy.priceList"); value is the new value as JSON text (e.g. "\"Felipe\"", "18", "null", "[{...}]"). Arrays and objects are replaced as a whole, so send the full new array. updates = [] when nothing changes. Keep everything already decided unless the player changes it; when they revise something, update only that part and anything that depends on it. When they reset part of it ("forget the family"), set those fields back to null/[].
+Capture everything the player tells you in the same turn (name, place, money, product, URL…) — don't wait to be asked twice.
 setting.startDate is local time "YYYY-MM-DDTHH:MM" (map any calendar to that form); player.startingMoney is in major units of player.currency.
 initialSituations[].involves lists starting character names or "player". unresolvedQuestions: only what must be settled before the start.
 
@@ -251,11 +252,11 @@ export class WorldCreation {
     return { draftId: row.id, status: 'finalized', text: 'World created. The story begins.', gameId: game.id, opening };
   }
 
-  private async copilot(draft: WorldDraft, awaiting: string | null, history: { role: string; text: string }[], input: string): Promise<CopilotTurn> {
+  private async copilot(draft: WorldDraft, awaiting: string | null, history: { role: string; text: string }[], input: string): Promise<CopilotTurn & { draft: WorldDraft }> {
     const system = copilotSystemPrompt(this.packs);
     const user = copilotUserPrompt({ draft, awaiting, history, input });
     let feedback: string[] = [];
-    let last: CopilotTurn | null = null;
+    let last: (CopilotTurn & { draft: WorldDraft }) | null = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       const prompt = feedback.length ? `${user}\n\nYOUR PREVIOUS OUTPUT WAS REJECTED:\n${feedback.map((f) => `- ${f}`).join('\n')}\nReturn corrected JSON.` : user;
       const res = await this.llm.complete({ task: 'world_copilot', system, user: prompt, schemaName: 'copilot_turn', schema: CopilotTurnSchema });
@@ -263,7 +264,9 @@ export class WorldCreation {
       try { value = JSON.parse(res.rawText); } catch { feedback = ['output was not valid JSON']; continue; }
       const parsed = CopilotTurnSchema.safeParse(value);
       if (!parsed.success) { feedback = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`); continue; }
-      last = parsed.data;
+      const applied = applyDraftUpdates(draft, parsed.data.updates);
+      if (!applied.draft) { feedback = applied.problems; continue; }
+      last = { ...parsed.data, draft: applied.draft };
       feedback = [];
       if ((last.intent === 'confirm_finalize' || last.intent === 'abandon') && !quoteIsFrom(last.approvalQuote, input)) {
         feedback.push(`intent ${last.intent} needs approvalQuote copied exactly from the player's latest message; if they did not say it, use discuss`);
