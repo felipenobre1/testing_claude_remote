@@ -8,9 +8,13 @@ import type { Trace } from '../src/engine/trace.ts';
 import { Engine } from '../src/engine/turn.ts';
 import { formatStatusLine } from '../src/debug/inspect.ts';
 import { ScriptedProvider } from '../src/llm/scripted.ts';
-import { adventurePack } from '../src/packs/adventure/index.ts';
+import { adventurePack as defaultAdventure } from '../src/packs/adventure/index.ts';
+import { ASHKAR_WORLD } from '../src/packs/adventure/world.ts';
 import { advRepo } from '../src/packs/adventure/state.ts';
 import { fixedRng, interp, lastPrompt, npc, tmpDbPath } from './helpers.ts';
+
+// The tests play in Ashkar (Rhen, Kesh, Oda…); the pack's default opening is the Kingkiller world.
+const adventurePack = { ...defaultAdventure, worldCreation: { ...defaultAdventure.worldCreation, template: ASHKAR_WORLD } };
 
 function start(opts: { roll?: number; beats?: boolean; narrator?: boolean; director?: boolean } = {}) {
   const store = new Store(tmpDbPath());
@@ -45,8 +49,25 @@ test('the example world: a fighter with skills, gear, fame, a debt and people wh
   assert.deepEqual([p.health, p.skills.combat!.level, p.skills.athletics!.level, p.fame], [100, 2, 2, 1]);
   assert.deepEqual(advRepo.items(s.store, s.game.id).map((i) => `${i.name}/${i.kind}/${i.quality}`), ['curved knife/weapon/1', 'padded desert coat/armor/0']);
   assert.deepEqual(s.store.listCharacters(s.game.id).map((c) => c.name).sort(), ['Kesh Adar', 'Oda Venn', 'Rhen', 'Sarai Tul']);
-  assert.match(formatStatusLine(s.store, s.game.id), /❤ 100\/100 · ⚔ combat 2 · ★ a few people know your name/);
+  assert.match(formatStatusLine(s.store, s.game.id), /❤ 100\/100 · level 1 · ★ a few people know your name/);
   s.store.close();
+});
+
+test('the default opening: Kvothe at the University, the day before admissions (Kingkiller-inspired, alternate from the start)', () => {
+  const store = new Store(tmpDbPath());
+  const engine = new Engine(store, new ScriptedProvider(), { pack: defaultAdventure, rng: fixedRng(0.5), beats: false, narrator: false, director: false });
+  const { game, player, opening } = engine.newGame();
+  assert.equal(player.name, 'Kvothe');
+  assert.match(opening, /^The University, across the river from Imre — /);
+  assert.match(opening, /Admissions \(The Hollows, the University\)/);
+  assert.match(formatStatusLine(store, game.id), /· j 13\.00 · ❤ 80\/80 · level 1 · ★ unknown ──$/); // strength 1: a scholar's body
+  const sheet = defaultAdventure.commands!.sheet!.run(store, game.id, [], 'pt');
+  assert.match(sheet, /astúcia ●●●●●/);
+  assert.match(sheet, /arcanismo +●○○○○\n +atuação +●●●○○/);
+  assert.deepEqual(store.listCharacters(game.id).map((c) => c.name).sort(), ['Ambrose Jakis', 'Denna', 'Devi', 'Elodin', 'Kilvin', 'Kvothe', 'Simmon']);
+  const seed = store.getWorldSeed<{ world: { sourceWorld: string; canonPolicy: string } }>(game.id)!;
+  assert.deepEqual([seed.world.sourceWorld, seed.world.canonPolicy], ['The Kingkiller Chronicle (Patrick Rothfuss)', 'alternate_from_start']);
+  store.close();
 });
 
 test('fights go exchange by exchange: moves, a counter-table, momentum, a d20; a killed person is dead for good', async () => {
@@ -266,7 +287,7 @@ test('in Portuguese: the narrator renders the result lines (numbers checked) and
   const llm = new ScriptedProvider();
   const engine = new Engine(store, llm, { pack: adventurePack, rng: fixedRng(1), beats: false, narrator: true });
   const { game } = engine.newGame({ language: 'Brazilian Portuguese' });
-  assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., 05:40 · .* · dr 30\.00 · ❤ 100\/100 · ⚔ combate 2 · ★ algumas pessoas sabem seu nome ──$/);
+  assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., 05:40 · .* · dr 30\.00 · ❤ 100\/100 · nível 1 · ★ algumas pessoas sabem seu nome ──$/);
 
   const fightTurn = interp({ intents: ['general_action'], minutesElapsed: 1, narration: '', suggestions: ['Treinar sozinho'],
     actions: [fight('um bandido de beco', { threat: 2, intent: 'drive_off', witnessed: false })] });

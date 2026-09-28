@@ -4,7 +4,7 @@ import type { WorldPlanner } from '../../engine/planner.ts';
 import { newId } from '../../engine/util.ts';
 import type { Store } from '../../db/store.ts';
 import type { GamePack, PackAction } from '../types.ts';
-import { ADVENTURE_WORLD } from './world.ts';
+import { KINGKILLER_WORLD } from './world.ts';
 import {
   ADVENTURE_MIGRATIONS, AdventureState, advRepo, ATTRIBUTES, DEFAULT_ATTRIBUTES, fameLabel, fameLabelIn, MAX_LEVEL, MOVES, practiceFor, SKILL_ATTR, SKILLS, xpForNext,
   type Combatant, type Encounter, type FoeIntent, type Injury, type Move, type Item, type Profile, type Skill,
@@ -401,7 +401,7 @@ const actions: PackAction[] = [
       action: z.literal('attempt'), feat: z.string().min(3).max(200), skill: z.enum(SKILLS), difficulty: z.number(),
       risk: z.enum(['none', 'injury', 'caught', 'loss']),
     }),
-    doc: `attempt: a risky feat whose outcome is uncertain — climbing, sneaking or hiding (stealth, risk caught), picking a lock, tracking, spotting something hidden (perception), surviving a storm, recalling lore. skill one of ${SKILLS.join('/')}; difficulty 1 (easy) … 5 (near impossible) — honest; risk = what failure costs. The game decides success.`,
+    doc: `attempt: a risky feat whose outcome is uncertain — climbing, sneaking or hiding (stealth, risk caught), picking a lock, tracking, spotting something hidden (perception), surviving a storm, recalling lore, working a sympathetic binding or any magic (arcana), playing, singing or acting before an audience (performance). skill one of ${SKILLS.join('/')}; difficulty 1 (easy) … 5 (near impossible) — honest; risk = what failure costs. The game decides success.`,
     handle: (api, a) => {
       const me = api.ctx.player.id;
       const p = profile(api, me);
@@ -643,6 +643,7 @@ function playerLines(api: WorldPlanner): string[] {
 const SHEET_PT: Record<string, string> = {
   strength: 'força', agility: 'agilidade', wits: 'astúcia', presence: 'presença', combat: 'combate', stealth: 'furtividade', athletics: 'atletismo',
   survival: 'sobrevivência', perception: 'percepção', persuasion: 'persuasão', deception: 'enganação', lore: 'conhecimento',
+  arcana: 'arcanismo', performance: 'atuação',
 };
 
 /** The character sheet (a read-only view of canonical state). */
@@ -742,7 +743,7 @@ export const adventurePack: GamePack = {
           quality: clamp(Math.round(m.quality ?? 1), 0, 3), quantity: Math.max(1, Math.round(m.quantity ?? 1)), createdAt: now });
       }
     },
-    template: ADVENTURE_WORLD,
+    template: KINGKILLER_WORLD, // quick start: `npm start -- new --quick --pack adventure`
   },
   npcAttack(api, attackerId, attack) {
     const named = api.ctx.characters.find((c) => c.id === attackerId);
@@ -817,7 +818,7 @@ export const adventurePack: GamePack = {
   statusParts(store, _gameId, playerId, lang = 'en') {
     const p = advRepo.profile(store, playerId);
     if (!p) return [];
-    return [`❤ ${p.health}/${p.maxHealth}`, `⚔ ${lang === 'pt' ? 'combate' : 'combat'} ${p.skills.combat?.level ?? 0}`, `★ ${fameLabelIn(p.fame, lang)}`];
+    return [`❤ ${p.health}/${p.maxHealth}`, `${lang === 'pt' ? 'nível' : 'level'} ${p.level}`, `★ ${fameLabelIn(p.fame, lang)}`];
   },
   prompts: {
     interpretActions: [

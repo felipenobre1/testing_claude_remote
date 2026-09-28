@@ -106,7 +106,7 @@ export const WorldDraftSchema = z.object({
     goals: z.array(text(200)).max(5),
     fears: z.array(text(200)).max(5),
     ambition: opt(300), // what they dream of becoming — the story pushes toward (and against) it
-    attributes: z.array(z.strictObject({ key: text(40), value: z.number() })).max(10), // numeric traits a pack reads (e.g. combat 2)
+    attributes: z.array(z.strictObject({ key: text(40), value: z.number() })).max(16), // numeric traits a pack reads (e.g. combat 2)
     location: opt(160), // where they live
     circumstances: z.array(text(200)).max(6), // canonical facts about their situation ("lives with parents")
     startingMoney: z.number().nullable(), // in the world's currency (major units)
