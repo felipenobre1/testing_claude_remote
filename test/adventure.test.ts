@@ -869,3 +869,32 @@ test('recollections: the player writes the past as they play — details are fre
   assert.equal(meet.status, 'committed', meet.error ?? '');
   s.store.close();
 });
+
+test('streaming: the passage reaches the reader as it is written; the dice come first; what was read stands', async () => {
+  const { ProseTap } = await import('../src/engine/story.ts');
+  // The tap decodes the prose field of streamed JSON, even with escapes split across chunks.
+  let got = '';
+  const tap = new ProseTap((d) => { got += d; });
+  const raw = JSON.stringify({ prose: 'Rain. He says "no" — \\ then\nleaves. ✓ æ', suggestions: ['x'], lines: [] });
+  for (let i = 0; i < raw.length; i += 3) tap.push(raw.slice(i, i + 3));
+  assert.equal(got, 'Rain. He says "no" — \\ then\nleaves. ✓ æ');
+
+  const s = start({ roll: 1, narrator: true });
+  const events: string[] = [];
+  let prose = '';
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: 'Teach me.',
+    actions: [{ action: 'attempt', feat: 'impress Oda with a knife trick', skill: 'combat', difficulty: 2, risk: 'none' }] }))
+    .enqueue('npc_turn', npc({ dialogue: 'Again, slower.' }))
+    // The passage forgets to quote her: what the reader read stands, and her words are added after it, exactly.
+    .enqueue('narrate', (req: { user: string }) => { events.push('narrate'); void req; return { prose: 'The knife spins once and lands in your palm. Oda does not smile.', suggestions: ['Do it again'], lines: [] }; });
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I show Oda a knife trick', on: {
+    rolls: (rs) => events.push(`rolls:${rs.map((x) => x.what).join(',')}`),
+    prose: (d) => { prose += d; },
+  } });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.deepEqual(events, ['rolls:impress Oda with a knife trick', 'narrate']); // the dice are known before the narrator writes
+  assert.equal(prose, 'The knife spins once and lands in your palm. Oda does not smile.');
+  assert.ok(r.text.startsWith(`${prose}\n\nOda Venn: “Again, slower.”\n\n🎲 impress Oda with a knife trick: success`), r.text);
+  assert.equal(s.llm.callsFor('narrate').length, 1); // no retry: the reader already has the passage
+  s.store.close();
+});

@@ -235,6 +235,52 @@ export function narratorUserPrompt(n: NarratorInput): string {
 const squash = (s: string) => s.toLowerCase().replace(/[\s"'“”‘’«».,!?;:—–-]+/g, ' ').trim();
 
 /** Every spoken line must appear verbatim (modulo punctuation/spacing) in the prose. */
+/**
+ * Reads the narrator's JSON output as it streams and passes on only the decoded "prose" text, character by character —
+ * so the reader sees the passage being written while the rest of the JSON (suggestions, lines) is still coming.
+ */
+export class ProseTap {
+  private raw = '';
+  private pos = -1; // index in raw where the prose string's content starts (-1: not found yet)
+  private done = false;
+  private esc = ''; // an escape sequence split across chunks
+  text = '';
+  private readonly emit: (delta: string) => void;
+  constructor(emit: (delta: string) => void) { this.emit = emit; }
+  push(chunk: string) {
+    if (this.done) return;
+    const from = this.raw.length;
+    this.raw += chunk;
+    if (this.pos < 0) {
+      const m = /"prose"\s*:\s*"/.exec(this.raw);
+      if (!m) return;
+      this.pos = m.index + m[0].length;
+    }
+    let out = '';
+    for (let i = Math.max(this.pos, from); i < this.raw.length; i++) {
+      const ch = this.raw[i]!;
+      if (this.esc) {
+        this.esc += ch;
+        if (this.esc[1] === 'u') {
+          if (this.esc.length < 6) continue;
+          out += String.fromCharCode(parseInt(this.esc.slice(2), 16));
+        } else {
+          out += ({ n: '\n', t: '\t', r: '', b: '', f: '', '"': '"', '\\': '\\', '/': '/' } as Record<string, string>)[this.esc[1]!] ?? this.esc[1]!;
+        }
+        this.esc = '';
+      } else if (ch === '\\') {
+        this.esc = ch;
+      } else if (ch === '"') {
+        this.done = true;
+        break;
+      } else {
+        out += ch;
+      }
+    }
+    if (out) { this.text += out; this.emit(out); }
+  }
+}
+
 export function narrationProblems(prose: string, words: NarratorInput['words']): string[] {
   const p = squash(prose);
   return words.filter((w) => w.text.trim() && !p.includes(squash(w.text))).map((w) => `the prose must quote ${w.speaker}'s words exactly: "${w.text}"`);

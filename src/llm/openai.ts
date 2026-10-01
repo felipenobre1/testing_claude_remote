@@ -45,16 +45,31 @@ export class OpenAIProvider implements LLMProvider {
 
   async complete(req: LLMRequest): Promise<LLMResponse> {
     let res: OpenAI.Responses.Response;
+    const params = {
+      model: this.model,
+      instructions: req.system,
+      input: req.user,
+      reasoning: { effort: this.effort[req.task] },
+      text: { format: { type: 'json_schema' as const, name: req.schemaName, schema: toWireSchema(req.schema), strict: true } },
+      store: false,
+    };
     try {
-      res = await this.client.responses.create({
-        model: this.model,
-        instructions: req.system,
-        input: req.user,
-        reasoning: { effort: this.effort[req.task] },
-        text: { format: { type: 'json_schema', name: req.schemaName, schema: toWireSchema(req.schema), strict: true } },
-        store: false,
-      });
+      if (req.onText) {
+        // Streaming: text deltas go to the caller as they arrive; the final response is checked like any other.
+        let final: OpenAI.Responses.Response | null = null;
+        for await (const ev of await this.client.responses.create({ ...params, stream: true })) {
+          if (ev.type === 'response.output_text.delta') req.onText(ev.delta);
+          else if (ev.type === 'response.completed' || ev.type === 'response.incomplete') final = ev.response;
+          else if (ev.type === 'response.failed') throw new LLMError('failed', ev.response.error?.message ?? 'response failed');
+          else if (ev.type === 'error') throw new LLMError('stream', ev.message);
+        }
+        if (!final) throw new LLMError('stream', 'the stream ended without a response');
+        res = final;
+      } else {
+        res = await this.client.responses.create(params);
+      }
     } catch (e) {
+      if (e instanceof LLMError) throw e;
       if (e instanceof OpenAI.APIConnectionError) throw new LLMError('network', `OpenAI unreachable: ${e.message}`);
       if (e instanceof OpenAI.APIError) throw new LLMError(`http_${e.status ?? 'unknown'}`, e.message);
       throw e;

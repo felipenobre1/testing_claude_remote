@@ -12,6 +12,8 @@ export interface LLMRequest {
   user: string;
   schemaName: string;
   schema: z.ZodType; // the provider converts it to its structured-output format
+  /** Streaming: called with the raw output text as it arrives (a provider that can't stream calls it once with everything). */
+  onText?: (delta: string) => void;
 }
 
 export interface LLMResponse {

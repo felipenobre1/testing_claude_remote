@@ -5,7 +5,7 @@ import {
   NpcTurnWireSchema, type Appraisal, type DecisionState, type DecisionStateProposal, type DirectorProposal, type InterpretResult, type NpcTurnEnvelope,
 } from '../domain/schemas.ts';
 import type {
-  Character, Game, GameEvent, Interaction, Offer, Relationship, Scene, TranscriptLine, TurnResponse, WebDocument,
+  Character, Game, GameEvent, Interaction, Offer, Relationship, RollRecord, Scene, TranscriptLine, TurnResponse, WebDocument,
 } from '../domain/types.ts';
 import { LLMError, type LLMProvider, type LLMTask } from '../llm/provider.ts';
 import {
@@ -26,7 +26,7 @@ import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, secretsText, worldLine } from './worldSeed.ts';
 import { languageName, UI, uiLang } from '../i18n.ts';
-import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
+import { beatDue, beatProblems, ProseTap, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
 
@@ -34,6 +34,15 @@ export interface TurnRequest {
   gameId: string;
   input: string;
   requestId?: string; // same id ⇒ same committed result, never applied twice
+  /** Live updates while the turn resolves (the interface shows them as they happen). */
+  on?: TurnListener;
+}
+
+export interface TurnListener {
+  /** The dice the player rolled, as soon as the outcome is decided — before the narrator writes about it. */
+  rolls?(rolls: RollRecord[]): void;
+  /** The narrator's passage as it is being written (decoded text, in order). */
+  prose?(delta: string): void;
 }
 
 /** Turn could not be completed; nothing canonical was written. */
@@ -118,7 +127,7 @@ export class Engine {
    * In a literary world, the narrator writes the opening scene (who you are, where you are, what presses on you).
    * Returns null when narration is concise, the narrator is off, or it fails — the caller shows the plain opening then.
    */
-  async openingProse(gameId: string): Promise<string | null> {
+  async openingProse(gameId: string, onProse?: (delta: string) => void): Promise<string | null> {
     const world = this.worldOf(gameId);
     if (!this.narratorEnabled || (world.seed.style.narration ?? 'literary') !== 'literary') return null;
     const store = this.store;
@@ -139,7 +148,10 @@ export class Engine {
       words: [], conversationEnded: false, choice: null,
     };
     try {
-      const res = await this.llm.complete({ task: 'narrate', system: narratorSystemPrompt(world.ctx, world.bible, player.name), user: narratorUserPrompt(input), schemaName: 'narration', schema: NarrationSchema });
+      const tap = onProse ? new ProseTap(onProse) : null;
+      const res = await this.llm.complete({ task: 'narrate', system: narratorSystemPrompt(world.ctx, world.bible, player.name), user: narratorUserPrompt(input), schemaName: 'narration', schema: NarrationSchema,
+        ...(tap ? { onText: (d: string) => tap.push(d) } : {}) });
+      if (tap?.text.trim()) return tap.text.trim(); // what the reader saw is the opening
       const parsed = NarrationParseSchema.safeParse(JSON.parse(res.rawText));
       return parsed.success ? parsed.data.prose.trim() : null;
     } catch {
@@ -173,7 +185,7 @@ export class Engine {
     const trace = newTrace({ turnId: newId('turn'), requestId, game, input: req.input, provider: this.llm.name });
 
     try {
-      return await this.run(req.input, game, trace);
+      return await this.run(req.input, game, trace, req.on);
     } catch (e) {
       if (e instanceof AlreadyFinal) return { ...e.response, replayed: true };
       const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -195,7 +207,7 @@ export class Engine {
 
   // --------------------------------------------------------------------------
 
-  private async run(input: string, game: Game, trace: Trace): Promise<TurnResponse> {
+  private async run(input: string, game: Game, trace: Trace, on?: TurnListener): Promise<TurnResponse> {
     const store = this.store;
     const now = this.now();
     const world = this.worldOf(game.id);
@@ -508,7 +520,9 @@ export class Engine {
     const lastResponse = store.listTurns(game.id).filter((t) => t.status === 'committed').at(-1)?.response as { suggestions?: string[]; narration?: string } | null;
     const previousIdeas = lastResponse?.suggestions ?? [];
     if (this.narratorEnabled && (seed.style.narration ?? 'literary') === 'literary') {
-      narration = await this.narrate(trace, world, player, economy, {
+      // The outcome is decided: the dice can be shown while the narrator writes about them.
+      if (economy.rolls.length) on?.rolls?.(economy.rolls);
+      narration = await this.narrate(trace, world, player, economy, on?.prose, {
         gameTime: plan.newGameTime, location: scene.location, sceneDescription: scene.description, playerState: this.pack.briefing.player(economy),
         input, playerSaid: interp.spokenText, playerDid: interp.visibleAction, draftNarration: interp.narration,
         facts: [...results, ...economy.witnessed, ...(beat ? [`${beat.title}: ${beat.perceived}${beatNewcomer ? ` (${beatNewcomer.name}: ${beatNewcomer.role})` : ''}`] : [])],
@@ -797,16 +811,29 @@ export class Engine {
   }
 
   /** Literary narration of a fully decided turn. Falls back to the concise text if the narrator fails twice. */
-  private async narrate(trace: Trace, world: ReturnType<Engine['worldOf']>, player: Character, _economy: WorldPlanner, input: NarratorInput): Promise<Narration | null> {
+  private async narrate(trace: Trace, world: ReturnType<Engine['worldOf']>, player: Character, _economy: WorldPlanner, stream: ((delta: string) => void) | undefined,
+    input: NarratorInput): Promise<Narration | null> {
+    // Streaming: the first attempt's prose reaches the reader as it is written. What they read stands — a retry only fixes
+    // the rest (lines, suggestions), and words spoken that the passage missed are added after it, exactly as said.
+    const tap = stream ? new ProseTap(stream) : null;
+    const shown = () => tap?.text.trim() ?? '';
+    const missingWords = (prose: string) => input.words.filter((w) => narrationProblems(prose, [w]).length).map((w) => `${w.speaker}: “${w.text.trim()}”`);
+    const withShown = (n: Narration): Narration => {
+      const prose = shown() || n.prose.trim();
+      const missing = shown() ? missingWords(prose) : [];
+      return { ...n, prose: [prose, ...missing].join('\n\n') };
+    };
     try {
       const out = await this.callStructured<Narration>(trace, 'narrate', narratorSystemPrompt(world.ctx, world.bible, player.name), narratorUserPrompt(input),
         'narration', NarrationSchema, NarrationParseSchema as unknown as z.ZodType<Narration>,
-        (n) => [...narrationProblems(n.prose, input.words), ...(input.resultLines?.length ? linesProblems(n.lines, input.resultLines) : [])]);
-      return { ...out, prose: out.prose.trim() };
+        (n) => [...(shown() ? [] : narrationProblems(n.prose, input.words)), ...(input.resultLines?.length ? linesProblems(n.lines, input.resultLines) : [])],
+        tap ? (d) => tap.push(d) : undefined);
+      return withShown(out);
     } catch (e) {
       if (!(e instanceof TurnFailure)) throw e;
       trace.narratorFailed = (e as Error).message;
-      return null;
+      // The reader already has the passage: keep it (result lines stay in the record's words).
+      return shown() ? withShown({ prose: '', suggestions: [], lines: [] }) : null;
     }
   }
 
@@ -830,7 +857,7 @@ export class Engine {
    */
   private async callStructured<T>(
     trace: Trace, task: LLMTask, system: string, user: string, schemaName: string,
-    wire: z.ZodType, parse: z.ZodType<T>, check?: (value: T, attempt: number) => string[],
+    wire: z.ZodType, parse: z.ZodType<T>, check?: (value: T, attempt: number) => string[], onText?: (delta: string) => void,
   ): Promise<T> {
     let feedback: string[] = [];
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -840,7 +867,7 @@ export class Engine {
       const call: Trace['llmCalls'][number] = { task, attempt, system, user: prompt, rawText: null, model: null, problems: [] };
       trace.llmCalls.push(call);
       const t0 = Date.now();
-      const res = await this.llm.complete({ task, system, user: prompt, schemaName, schema: wire });
+      const res = await this.llm.complete({ task, system, user: prompt, schemaName, schema: wire, ...(attempt === 1 && onText ? { onText } : {}) });
       call.ms = Date.now() - t0;
       call.rawText = res.rawText;
       call.model = res.model;

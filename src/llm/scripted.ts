@@ -33,6 +33,9 @@ export class ScriptedProvider implements LLMProvider {
     const reply = this.queues.get(req.task)?.shift();
     if (reply === undefined) throw new Error(`ScriptedProvider: no scripted reply queued for task "${req.task}"`);
     const value = typeof reply === 'function' ? (reply as (r: LLMRequest) => unknown)(req) : reply;
-    return { rawText: typeof value === 'string' ? value : JSON.stringify(value), model: 'scripted' };
+    const rawText = typeof value === 'string' ? value : JSON.stringify(value);
+    // Streams in a few uneven chunks, so tests exercise the incremental path.
+    if (req.onText) for (let i = 0; i < rawText.length; i += 37) req.onText(rawText.slice(i, i + 37));
+    return { rawText, model: 'scripted' };
   }
 }

@@ -159,34 +159,42 @@ async function showRolls(reader: Reader, rolls: RollRecord[], lang: UiLang) {
 }
 
 /** Shows a live timer while the model works, so a slow reply never looks like a freeze. */
-async function working<T>(label: string, p: Promise<T>, lang: UiLang = 'en'): Promise<T> {
+function spinner(label: string, lang: UiLang = 'en') {
   const t0 = Date.now();
-  const tick = () => stdout.write(`\r⏳ ${label}… ${Math.round((Date.now() - t0) / 1000)}s (${UI[lang].typeAhead})`);
+  let running = true;
+  const tick = () => { if (running) stdout.write(`\r⏳ ${label}… ${Math.round((Date.now() - t0) / 1000)}s (${UI[lang].typeAhead})`); };
   tick();
   const timer = setInterval(tick, 1000);
-  try {
-    return await p;
-  } finally {
-    clearInterval(timer);
-    stdout.write('\r\x1b[K');
-  }
+  return { stop() { if (!running) return; running = false; clearInterval(timer); stdout.write('\r\x1b[K'); } };
+}
+async function working<T>(label: string, p: Promise<T>, lang: UiLang = 'en'): Promise<T> {
+  const s = spinner(label, lang);
+  try { return await p; } finally { s.stop(); }
 }
 
 /** In a literary world the narrator writes the opening scene; otherwise (or if it fails) the plain opening is shown. */
 async function narratedOpening(engine: Engine, gameId: string, plain: string): Promise<string> {
   const lang = langOf(engine.store, gameId);
-  const prose = await working(UI[lang].settingScene, engine.openingProse(gameId), lang);
-  if (!prose) return plain;
   const store = engine.store;
   const game = store.getGame(gameId)!;
   const place = store.getWorldSeed<WorldSeed>(gameId)?.world.place ?? store.getScene(gameId).location;
+  // The opening streams: the header, then the passage as the narrator writes it.
+  const sp = spinner(UI[lang].settingScene, lang);
+  let streamed = false;
+  const prose = await engine.openingProse(gameId, (d) => {
+    if (!streamed) { sp.stop(); streamed = true; stdout.write(`\n${place} — ${longDate(game.gameTime, lang)}\n\n`); }
+    stdout.write(d);
+  });
+  sp.stop();
+  if (!prose) return plain;
   const soon = upcoming(store, gameId, game.gameTime, 14).map((i) => {
     const x = i.payload as { title: string; location?: string | null };
     return `  • ${longDate(i.dueGameTime, lang)} — ${x.title}${x.location ? ` (${x.location})` : ''}`;
   });
   const seed = store.getWorldSeed<WorldSeed>(gameId);
   soon.push(...(seed?.deadlines ?? []).map((d) => `  ⚠ ${longDate(d.when, lang)} — ${UI[lang].deadline}`));
-  return `${place} — ${longDate(game.gameTime, lang)}\n\n${prose}${soon.length ? `\n\n${UI[lang].comingUp}\n${soon.join('\n')}` : ''}`;
+  const comingUp = soon.length ? `\n\n${UI[lang].comingUp}\n${soon.join('\n')}` : '';
+  return streamed ? comingUp.replace(/^\n\n/, '\n') : `${place} — ${longDate(game.gameTime, lang)}\n\n${prose}${comingUp}`;
 }
 
 const langOf = (store: Store, gameId: string) => uiLang(store.getWorldSeed<WorldSeed>(gameId)?.style.language);
@@ -246,12 +254,30 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
         console.log(inspect(store, gameId, parts.filter((p) => p !== '--full'), parts.includes('--full')));
         continue;
       }
-      const r = await working(/^(\/gm\b|\?)/i.test(line) ? t.gmThinking : t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
+      // While the turn resolves: the dice (as soon as the outcome is decided), then the passage as it is written.
+      // Prose that arrives while the dice are still rolling waits for them — the die lands before the story tells what it meant.
+      const sp = spinner(/^(\/gm\b|\?)/i.test(line) ? t.gmThinking : t.worldMoving, lang);
+      let streamed = '';
+      let held = '';
+      let live = false;
+      let diceRun: Promise<void> | null = null;
+      const goLive = () => { live = true; stdout.write(`\n${held}`); held = ''; };
+      const r = await engine.takeTurn({ gameId, input: line, on: {
+        rolls: dice ? (rs) => { sp.stop(); diceRun = showRolls(reader, rs, lang).then(goLive); } : undefined,
+        prose: (d) => {
+          streamed += d;
+          if (!live && !diceRun) { sp.stop(); goLive(); }
+          if (live) stdout.write(d); else held += d;
+        },
+      } }).finally(() => sp.stop());
+      if (diceRun) await diceRun;
+      else if (dice && r.status === 'committed' && r.rolls?.length) await showRolls(reader, r.rolls, lang); // no narrator: dice, then the text
+      const shownDice = dice && Boolean(r.rolls?.length);
       const ideas = hints && r.suggestions?.length ? `\n\n💡 ${t.ideas}: ${r.suggestions.join(' · ')}` : '';
-      if (dice && r.status === 'committed' && r.rolls?.length) await showRolls(reader, r.rolls, lang);
-      // With the dice shown, the bracketed roll details would only repeat them.
-      const body = r.status === 'failed' ? t.failed : rolls && !(dice && r.rolls?.length) ? r.text : r.text.replace(/ \[[^\]\n]*\]/g, '');
-      console.log(`\n${body}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
+      // What was already streamed isn't printed again; with the dice shown, the bracketed roll details would only repeat them.
+      const text = streamed.trim() && r.text.startsWith(streamed.trim()) ? r.text.slice(streamed.trim().length) : `${streamed ? '\n\n' : ''}${r.text}`;
+      const body = r.status === 'failed' ? t.failed : rolls && !shownDice ? text : text.replace(/ \[[^\]\n]*\]/g, '');
+      console.log(`${streamed ? '' : '\n'}${body}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);
       if (r.gameOver) { console.log('☠  THE END.  (npm start -- export keeps the log of this story)\n'); break; }
