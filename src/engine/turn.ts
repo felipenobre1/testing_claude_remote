@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import type { Store } from '../db/store.ts';
 import {
-  AppraisalSchema, CharacterProposalSchema, COMPUTED_FACTORS, DecisionStateProposalSchema, DirectorProposalSchema, interpretSchemaFor, NpcTurnEnvelopeSchema,
+  AppraisalSchema, CharacterProposalSchema, GameMasterAnswerSchema, COMPUTED_FACTORS, DecisionStateProposalSchema, DirectorProposalSchema, interpretSchemaFor, NpcTurnEnvelopeSchema,
   NpcTurnWireSchema, type Appraisal, type DecisionState, type DecisionStateProposal, type DirectorProposal, type InterpretResult, type NpcTurnEnvelope,
 } from '../domain/schemas.ts';
 import type {
@@ -14,7 +14,7 @@ import {
 } from './context.ts';
 import {
   appraiseSystemPrompt, appraiseUserPrompt, decisionStateSystemPrompt, decisionStateUserPrompt, generateSystemPrompt, generateUserPrompt,
-  interpretSystemPrompt, npcSystemPrompt, type WorldContext,
+  gameMasterSystemPrompt, interpretSystemPrompt, npcSystemPrompt, type WorldContext,
 } from './prompts.ts';
 import { newTrace, type Trace, type WriteRecord } from './trace.ts';
 import { addMinutes, formatGameTime, newId } from './util.ts';
@@ -200,6 +200,9 @@ export class Engine {
     const world = this.worldOf(game.id);
     const pp = retrievePlayerPerspective(store, game.id);
     const player = pp.player;
+    // "/gm …" or "? …": a question to the game master, outside the story.
+    const direct = input.match(/^\s*(?:\/gm\b|\?)\s*([\s\S]+)$/i);
+    if (direct) return this.gameMaster(trace, game, direct[1]!.trim());
     if (player.status === 'dead') {
       return this.clarify(trace, game, `☠ ${player.name} is dead. This story is over. (npm start -- export keeps the log; npm start -- new starts another story.)`);
     }
@@ -222,6 +225,7 @@ export class Engine {
     // Self-harm is never simulated: step out of the fiction, change nothing.
     if (interp.safety === 'self_harm') return this.clarify(trace, game, SELF_HARM_MESSAGE);
     if (interp.clarificationQuestion) return this.clarify(trace, game, interp.clarificationQuestion);
+    if (interp.gameMasterQuestion) return this.gameMaster(trace, game, interp.gameMasterQuestion);
 
     // 2. Resolve who the player is addressing; generate them if they don't exist yet.
     const npcs = everyone.filter((c) => !c.isPlayer);
@@ -856,6 +860,38 @@ export class Engine {
       if (feedback.length === 0) return parsed.data;
     }
     throw new TurnFailure(`${task}: model output rejected on both attempts (${feedback.join('; ')})`);
+  }
+
+  /**
+   * Out of the story: the player asks the game master. Answered from what the player could know (their perspective,
+   * what they just read) and the rules. Nothing in the world changes and no time passes.
+   */
+  private async gameMaster(trace: Trace, game: Game, question: string): Promise<TurnResponse> {
+    const store = this.store;
+    const world = this.worldOf(game.id);
+    const pp = retrievePlayerPerspective(store, game.id);
+    const characters = store.listCharacters(game.id);
+    const planner = new WorldPlanner({ store, pack: world.pack, gameId: game.id, turnId: trace.turnId, now: this.now(), gameTime: game.gameTime,
+      location: pp.scene.location, player: pp.player, characters, interaction: pp.interaction });
+    const present = (pp.interaction?.participantIds ?? []).filter((id) => id !== pp.player.id).map((id) => characters.find((c) => c.id === id)?.name).filter(Boolean);
+    const recent = store.listTurns(game.id).filter((t) => t.status === 'committed').slice(-3).map((t) => {
+      const r = t.response as TurnResponse | null;
+      return [`> ${t.playerInput}`, r?.narration || r?.text || '', ...(r?.results ?? [])].filter(Boolean).join('\n');
+    });
+    const user = [
+      `THE PLAYER ASKS: ${question}`, '',
+      `TIME: ${formatGameTime(game.gameTime)}`,
+      `PLACE: ${pp.scene.location}. ${pp.scene.description}`,
+      ...(present.length ? [`IN CONVERSATION WITH: ${present.join(', ')}`] : []),
+      '', `THE PLAYER CHARACTER (${pp.player.name}):`, playerWorldBriefing(planner, game.gameTime),
+      ...(pp.notes.length ? ['', 'WHAT THEY HAVE FOUND OUT:', ...pp.notes.slice(-12).map((k) => `- ${k.topic}: ${k.belief}`)] : []),
+      ...(pp.knownCharacters.length ? ['', 'PEOPLE THEY KNOW:', ...pp.knownCharacters.filter((c) => !c.isPlayer).map((c) => `- ${c.name} (${c.role})${c.status === 'dead' ? ' — DEAD' : ''}`)] : []),
+      '', 'THE LAST MOMENTS OF PLAY (what the player typed and read):', ...(recent.length ? recent : ['(the story has just begun)']),
+    ].join('\n');
+    const out = await this.callStructured<{ answer: string }>(trace, 'game_master', gameMasterSystemPrompt(world.ctx, world.pack.prompts.rules), user, 'game_master_answer',
+      GameMasterAnswerSchema, GameMasterAnswerSchema);
+    trace.gameMaster = { question, answer: out.answer };
+    return this.clarify(trace, game, `🎲 ${UI[uiLang(world.ctx.language)].gm}: ${out.answer}`);
   }
 
   private clarify(trace: Trace, game: Game, question: string): TurnResponse {

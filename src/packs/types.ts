@@ -93,6 +93,8 @@ export interface GamePack {
     interpretActions: string;
     /** World background for the Story Director (what kinds of developments are plausible here). */
     director: string;
+    /** How this pack's mechanics work, in plain words — what the game master explains when the player asks about the rules. */
+    rules?: string;
   };
   inspect?(store: Store, gameId: string): string;
   /** Name of a pack entity from committed state (for debug views). */

@@ -35,7 +35,9 @@ export const dealOfferKind: OfferKindDef = {
     if (!api.payBetween(from, to, pays, what, 'deal') || !api.payBetween(to, from, gets, what, 'deal')) return;
     // What was paid is part of the result, so the story can never contradict the ledger.
     const paid = [pays ? `${api.name(from)} paid ${api.name(to)} ${api.money(pays)}` : '', gets ? `${api.name(to)} paid ${api.name(from)} ${api.money(gets)}` : ''].filter(Boolean);
-    api.results.push(`✓ Deal: ${what}${paid.length ? ` — ${paid.join('; ')}` : ' — no money changed hands yet'}`);
+    const line = `✓ Deal: ${what}${paid.length ? ` — ${paid.join('; ')}` : ' — no money changed hands yet'}`;
+    api.results.push(line);
+    api.witnessed.push(line); // both sides saw it: what the NPC says must match the ledger
     if (t.price_offerer_pays_later) api.addObligation(from, to, `the rest of the payment for: ${what}`, t.price_offerer_pays_later, 2, null);
     if (t.price_offerer_receives_later) api.addObligation(to, from, `the rest of the payment for: ${what}`, t.price_offerer_receives_later, 2, null);
   },

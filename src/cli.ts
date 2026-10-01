@@ -19,7 +19,7 @@ const USAGE = `Living Story Engine
 
   npm start -- new                          design a new world with the World Creation Copilot, then play
                                             (resumes your unfinished world draft if there is one; --fresh starts over)
-  npm start -- new --quick [--pack startup|adventure|open] [--name Felipe] [--lang "Brazilian Portuguese"]
+  npm start -- new --quick [--pack startup|adventure|open] [--name Felipe] [--lang pt]
                                             skip the conversation: start the pack's example world
   npm start -- continue [gameId]            continue a game (default: most recent)
   npm start -- games                        list games
@@ -34,7 +34,8 @@ Options: --db <path> (default data/startup.db or $STARTUP_DB), --debug (print th
 Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 
 While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
-In game: type what you do. Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit
+In game: type what you do. Ask the game master out of character with /gm <question> or ? <question>
+  (or just "I ask the narrator: …"). Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit
   Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)  /rolls (dice details on/off)`;
 
 function parseArgs(argv: string[]) {
@@ -93,8 +94,17 @@ function lineReader() {
   const queue: string[] = [];
   let waiter: ((line: string | null) => void) | null = null;
   let closed = false;
-  rl.on('line', (l) => { if (waiter) { const w = waiter; waiter = null; w(l); } else queue.push(l); });
-  rl.on('close', () => { closed = true; waiter?.(null); waiter = null; });
+  // A paste arrives as many lines at once: lines that come within a moment of each other are one message.
+  let burst: string[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = () => {
+    timer = null;
+    const text = burst.join('\n');
+    burst = [];
+    if (waiter) { const w = waiter; waiter = null; w(text); } else queue.push(text);
+  };
+  rl.on('line', (l) => { burst.push(l); if (timer) clearTimeout(timer); timer = setTimeout(flush, 40); });
+  rl.on('close', () => { if (timer) { clearTimeout(timer); flush(); } closed = true; waiter?.(null); waiter = null; });
   return {
     next(prompt: string): Promise<string | null> {
       if (queue.length) { const l = queue.shift()!; stdout.write(`${prompt}${l}\n`); return Promise.resolve(l); }
@@ -192,7 +202,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
         console.log(inspect(store, gameId, parts.filter((p) => p !== '--full'), parts.includes('--full')));
         continue;
       }
-      const r = await working(t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
+      const r = await working(/^(\/gm\b|\?)/i.test(line) ? t.gmThinking : t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
       const ideas = hints && r.suggestions?.length ? `\n\n💡 ${t.ideas}: ${r.suggestions.join(' · ')}` : '';
       const body = r.status === 'failed' ? t.failed : rolls ? r.text : r.text.replace(/ \[[^\]\n]*\]/g, '');
       console.log(`\n${body}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);

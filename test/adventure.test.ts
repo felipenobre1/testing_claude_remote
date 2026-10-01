@@ -745,3 +745,39 @@ test('playtest replay: "1 jot now, 1 when we finish" — the deal pays what it s
   assert.match((await engine.takeTurn({ gameId: game.id, input: 'tchau' })).text, /\[A conversa terminou\.\]/);
   pt.close();
 });
+
+test('the game master answers out of character: from what the player knows and the rules; the story does not move', async () => {
+  const store = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: adventurePack, rng: fixedRng(0.5), beats: false, narrator: false });
+  const { game } = engine.newGame({ language: 'pt' });
+  llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 2, narration: 'Você sussurra para a pedra.',
+    actions: [{ action: 'attempt', feat: 'speak the name of the stone', skill: 'arcana', difficulty: 5, risk: 'none' }] }));
+  await engine.takeTurn({ gameId: game.id, input: 'sussurro o nome da pedra' });
+  const before = store.getGame(game.id)!;
+
+  // "? …" goes straight to the game master.
+  llm.enqueue('game_master', (req: { system: string; user: string }) => {
+    assert.match(req.user, /^THE PLAYER ASKS: a pedra se desfez\?/);
+    assert.match(req.user, /THE LAST MOMENTS OF PLAY \(what the player typed and read\):\n> sussurro o nome da pedra\nVocê sussurra para a pedra\.\n🎲 speak the name of the stone/);
+    assert.match(req.user, /Attributes \(1–5\), level and skills/); // the character sheet
+    assert.match(req.system, /HOW THE GAME WORKS:\n- The character has four attributes/);
+    assert.match(req.system, /Never reveal what the character cannot know/);
+    assert.match(req.system, /LANGUAGE: the player plays in Brazilian Portuguese/);
+    return { answer: 'Não. A pedra continua inteira; nada visível aconteceu com ela.' };
+  });
+  const r = await engine.takeTurn({ gameId: game.id, input: '? a pedra se desfez?' });
+  assert.equal(r.text, '🎲 Mestre do jogo: Não. A pedra continua inteira; nada visível aconteceu com ela.');
+  assert.equal(llm.callsFor('interpret').length, 1); // no interpretation: it isn't a move in the story
+  const after = store.getGame(game.id)!;
+  assert.deepEqual([after.gameTime, after.revision], [before.gameTime, before.revision]); // nothing happened, no time passed
+
+  // Asked inside a normal message: the interpreter recognises it and hands it over.
+  llm.enqueue('interpret', interp({ intents: ['general_action'], gameMasterQuestion: 'quanto de vida eu tenho?' }))
+    .enqueue('game_master', { answer: 'Você está com 100 de 100.' });
+  const r2 = await engine.takeTurn({ gameId: game.id, input: 'pergunto ao narrador: quanto de vida eu tenho?' });
+  assert.equal(r2.text, '🎲 Mestre do jogo: Você está com 100 de 100.');
+  assert.equal(store.getGame(game.id)!.revision, before.revision);
+  assert.match(llm.callsFor('interpret').at(-1)!.system, /gameMasterQuestion: when the player steps OUT of the story/);
+  store.close();
+});

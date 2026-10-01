@@ -88,6 +88,10 @@ These are generic engine features. Each world sets them at creation (`style.pace
 - **Protection.** Attacking someone guarded means fighting the guards first (`fight.guards`). Only when they are down does the one they protect enter the fight, and trying to kill makes the guards fight to kill.
 - **People attack you.** In a conversation, an NPC can decide to attack (`attack`: intent, how dangerous they are, how). Scene beats can be attacks too: an ambush, someone you wronged, a hired blade. The attacker strikes first and a fight begins with the player on the back foot (`npcAttack`); someone who joins a fight already on is added to it.
 
+## Asking the game master
+
+The story pauses whenever you ask the game master something out of character: `/gm <question>`, `? <question>`, or just "I ask the narrator: …" in a normal message (the interpreter recognises it). The game master answers from what your character could know (the scene, your sheet, your notes, the people you know, the last moments of play) and from the pack's rules. It never reveals secrets or decides outcomes, nothing in the world changes and no time passes. The question and answer are kept in the turn log and the playtest export.
+
 ## Game Pack: Adventure
 
 For fantasy and science-fantasy worlds, including a known universe used as reference (Dune-like and so on). The engine stays agnostic: any world can be built with the Copilot. Quick start: `npm start -- new --quick --pack adventure` opens the default world, inspired by *The Kingkiller Chronicle*: you are Kvothe at fifteen, the day before admissions at the University, with thirteen jots, no lute and the Chandrian on your mind. Canon policy is *alternate from the start*: nothing after that morning is written. It is a story of tuition, debts, music, rivals, love and a slow mystery, with violence that is rare and matters. The original desert world of Ashkar (Rhen, a pit fighter) is kept for the tests.

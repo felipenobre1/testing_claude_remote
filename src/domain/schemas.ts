@@ -48,6 +48,8 @@ const interpretFields = {
   minutesElapsed: z.number().int().min(0).max(10080), // up to a week of focused work / waiting
   narration: z.string().max(1500),
   clarificationQuestion: z.string().max(400).nullable(),
+  /** The player stepped out of the story to ask the game master something (rules, what they perceive or know). Nothing else happens. */
+  gameMasterQuestion: z.string().max(600).nullable(),
   suggestions: z.array(z.string().min(3).max(160)).max(3),
   /** Socially significant things the player did this turn that people may remember and act on later. */
   deeds: z.array(z.object({
@@ -62,6 +64,9 @@ export function interpretSchemaFor(packActions: readonly z.ZodObject[]) {
   return z.object({ ...interpretFields, actions: z.array(z.discriminatedUnion('action', all)).max(6) });
 }
 export const InterpretResultSchema = interpretSchemaFor([]);
+
+/** The game master's out-of-character answer to the player. */
+export const GameMasterAnswerSchema = z.object({ answer: z.string().min(1).max(1500) });
 export type InterpretResult = Omit<z.infer<typeof InterpretResultSchema>, 'actions'> & { actions: PlayerAction[] };
 
 /** Character generation — only when a referenced person does not exist yet. */

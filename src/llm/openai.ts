@@ -38,6 +38,7 @@ export class OpenAIProvider implements LLMProvider {
       world_copilot: (process.env.OPENAI_EFFORT_COPILOT as Effort) ?? 'medium',
       scene_beat: (process.env.OPENAI_EFFORT_BEAT as Effort) ?? 'medium',
       narrate: (process.env.OPENAI_EFFORT_NARRATE as Effort) ?? 'medium',
+      game_master: (process.env.OPENAI_EFFORT_GM as Effort) ?? 'low',
       ...opts.effort,
     };
   }

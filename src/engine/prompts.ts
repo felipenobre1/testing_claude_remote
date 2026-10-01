@@ -18,6 +18,21 @@ export function languageRule(language: string, fields: string): string {
   return `\nLANGUAGE: the player plays in ${language}. Write ${fields} in ${language} — natural and native, never translated-sounding. Everything else (other fields, JSON keys, enum values) stays in English.`;
 }
 
+/** The game master answers the player out of character: rules and what their character could know — never secrets, never outcomes. */
+export function gameMasterSystemPrompt(world: WorldContext, rules: string | undefined): string {
+  return `You are the game master of an interactive story, answering the PLAYER out of character. The story is paused; nothing you say happens in it.
+WORLD: ${world.line}
+${world.rules.length ? `WORLD RULES:\n${world.rules.map((r) => `- ${r}`).join('\n')}\n` : ''}${rules ? `HOW THE GAME WORKS:\n${rules}\n` : ''}
+Answer the question briefly and plainly (1–5 sentences), like a good tabletop game master:
+- About the rules and mechanics: explain how it works and what the numbers mean.
+- About what just happened or what the character perceives: answer from THE LAST MOMENTS OF PLAY and the briefing — what the character saw, heard and knows. Clarify what the prose left ambiguous, without contradicting it.
+- About what the character knows: only what is in the briefing, the world rules, or what someone of their background would plausibly know.
+- Never reveal what the character cannot know: other people's thoughts or plans, hidden witnesses, secrets, what is behind a closed door. Say plainly that they don't know, and how they could find out in play.
+- Never decide outcomes or change the world: if the question is really an attempt ("can I convince her?"), say what it would involve and that the player must try it in the story.
+- You may suggest what the character could do, briefly.${languageRule(world.language, 'the answer')}
+Return JSON only.`;
+}
+
 /** Content rules by world setting. Sexual content is never produced; self-harm by the player is handled outside the fiction. */
 export function contentRule(v: WorldContext['violence'], who: 'narrator' | 'npc'): string {
   const sex = 'Never produce sexual content.';
@@ -74,6 +89,7 @@ ${pack.prompts.interpretActions}
 - If ${playerName} contacts someone without saying what yet ("I call Marco to tell him about it"), just start the conversation (spokenText null). Never ask the player what they want to say.
 - deeds: socially significant things ${playerName} does or says THIS turn that people would remember and might act on later — insults, threats, humiliation, cruelty, betrayal, a broken promise, boasting of a crime; or generosity, mercy, courage. NOT fights, thefts, lies, persuasion or feats (those are actions). against = who it targets (exact known name, or null); severity 1 (petty) … 5 (unforgivable / unforgettable); tone harm or kindness; exposure = how exposed the place is (private: a closed room, an empty yard at dawn; semi_public: a street, a workshop, a tavern corner; public: a market, a crowd, the pits). [] for ordinary moments.
 - suggestions: 2–3 concrete next moves ${playerName} could make now, as short imperative phrases (max ~12 words each), grounded ONLY in the briefing: upcoming events, known people, notes and contacts, the product's problems, money and time. Mix kinds (someone to contact, something to do, somewhere to go or time to let pass). Never the thing ${playerName} just did this turn. Ideas, never outcomes or promises. [] when clarifying.
+- gameMasterQuestion: when the player steps OUT of the story to ask the game master or narrator something ("pergunto ao narrador: a pedra se desfez?", "GM, how much health do I have?", "(OOC) can I use sympathy here?", "what does my character know about X?") put their question here, in their words, and set intents ["general_action"], minutesElapsed 0, no actions, no spokenText — nothing happens in the story. Questions a character asks another character are NOT for the game master. null otherwise.
 - clarificationQuestion: null in almost every case. Only ask when ambiguity would change important persistent state (for example two known people could be meant) and there is no safe reasonable interpretation. Prefer a conservative reasonable interpretation.
 
 Lightweight actions (grabbing a drink, walking to the balcony) simply happen; there is no inventory. Return JSON only.`;

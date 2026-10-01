@@ -13,6 +13,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promise${n > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`,
     gameFooter: (id: string) => `(game ${id} — /quit to leave; everything is saved after each turn)`,
     hintsOn: 'next-move ideas on', hintsOff: 'next-move ideas off', failed: 'Something went wrong while resolving that — nothing was saved. Try again.',
+    gm: 'Game master', gmThinking: 'the game master is thinking',
     ended: (channel: string) => `[The ${channel === 'phone' ? 'call' : channel === 'message' ? 'chat' : 'conversation'} has ended.]`,
   },
   pt: {
@@ -21,6 +22,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promessa${n > 1 ? 's' : ''}${overdue ? ` (${overdue} atrasada${overdue > 1 ? 's' : ''}!)` : ''}`,
     gameFooter: (id: string) => `(jogo ${id} — /quit para sair; tudo é salvo a cada turno)`,
     hintsOn: 'ideias de próximos passos ligadas', hintsOff: 'ideias de próximos passos desligadas', failed: 'Algo deu errado ao resolver isso — nada foi salvo. Tente de novo.',
+    gm: 'Mestre do jogo', gmThinking: 'o mestre do jogo está pensando',
     ended: (channel: string) => (channel === 'phone' ? '[A ligação terminou.]' : channel === 'message' ? '[A conversa por mensagens terminou.]' : '[A conversa terminou.]'),
   },
 } as const;

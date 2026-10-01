@@ -811,6 +811,16 @@ export const adventurePack: GamePack = {
         + 'Read the move from what the player describes (a wild swing is strong, "I watch for an opening" is defend, "I kick the brazier at him" is ground). Reward real tactics with cleverness, never mere flowery words.',
       '  Offer kinds for make_offer: deal (terms: price_offerer_pays / price_offerer_receives on acceptance, price_offerer_pays_later / price_offerer_receives_later when it is done; put what is exchanged in label/description).',
     ].join('\n'),
+    rules: [
+      '- The character has four attributes (strength, agility, wits, presence; 1–5) and ten skills (0–5): combat, stealth, athletics, survival, perception, persuasion, deception, lore, arcana (magic, sympathy, artifice, naming), performance (music, song, acting). Each skill leans on an attribute. /sheet shows them.',
+      '- Uncertain acts are rolled: skill + attribute bonus ((attribute − 2) × 0.5) − difficulty (1–5) − the other person\'s perception when someone resists + a d20 (1 → −3 … 20 → +5). A margin of +1.5 or more is a success, −1 or more a partial success, below that a failure. The bracket after a result shows the roll (/rolls hides it).',
+      '- For stealth and theft the margin is hidden: you can be seen without knowing it, and witnesses may report you or take revenge later.',
+      '- Fights go exchange by exchange: each message is one move (heavy attack, quick attack, guard, feint, grapple, using the ground, breaking away, yielding). Moves counter each other; breath, the upper hand, wounds, weapons, armour, clever tactics and a d20 decide each exchange. People stop once they have what they wanted; someone fighting to kill does not — the character can die.',
+      '- Health is 70 + strength × 10, +5 per level. Wounds are light, serious or critical; rest heals, serious wounds need a healer.',
+      '- Experience is rolled from what was done (fights, feats, lies, persuasion, theft). Each level (100 × level XP) gives a point: /spend <skill> costs 1, /spend <attribute> costs 3. Training also improves a skill through practice.',
+      '- Fame grows with deeds done in front of others; people hear what is said about the character and see their wounds.',
+      '- Money is real: prices, deals and promises are kept in a ledger; what someone owes is recorded.',
+    ].join('\n'),
     director: 'A dangerous world of factions, feuds, debts, rivals, beasts and opportunities. Developments come from people\'s ambitions and grudges, '
       + 'from what the player did (fights are remembered, fame attracts challengers and patrons), and from the player\'s ambition: put chances and prices on the road to it.',
   },

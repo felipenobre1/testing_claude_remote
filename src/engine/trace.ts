@@ -36,6 +36,8 @@ export interface Trace {
     ms?: number; // how long the model took
   }[];
   interpretation?: InterpretResult;
+  /** An out-of-character question to the game master and its answer (not part of the story). */
+  gameMaster?: { question: string; answer: string };
   resolution?: { kind: 'existing' | 'generated' | 'open_conversation' | 'none' | 'ambiguous'; name?: string; characterId?: string; candidates?: string[] };
   generatedCharacter?: Character & { relationshipToPlayer: string };
   beat?: unknown; // the scene beat that happened this turn (see engine/story.ts)
