@@ -551,6 +551,8 @@ export class WorldPlanner {
     const o = this.obligation(promiseId);
     if (!o || o.debtorId !== npcId) return `fulfill_promise: no promise ${promiseId} made by you`;
     if (o.status !== 'open') return `fulfill_promise: promise ${promiseId} is already ${o.status}`;
+    // A promise of money is kept by paying it.
+    if (o.amountCents && !this.payBetween(npcId, o.creditorId, o.amountCents, `promise: ${o.description}`, 'promise')) return null;
     this.resolveObligation(o);
     return null;
   }

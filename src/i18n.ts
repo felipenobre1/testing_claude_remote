@@ -13,6 +13,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promise${n > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`,
     gameFooter: (id: string) => `(game ${id} — /quit to leave; everything is saved after each turn)`,
     hintsOn: 'next-move ideas on', hintsOff: 'next-move ideas off', failed: 'Something went wrong while resolving that — nothing was saved. Try again.',
+    ended: (channel: string) => `[The ${channel === 'phone' ? 'call' : channel === 'message' ? 'chat' : 'conversation'} has ended.]`,
   },
   pt: {
     ideas: 'Ideias', worldMoving: 'o mundo está se movendo', settingScene: 'o narrador está preparando a cena', typeAhead: 'você pode continuar digitando',
@@ -20,6 +21,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promessa${n > 1 ? 's' : ''}${overdue ? ` (${overdue} atrasada${overdue > 1 ? 's' : ''}!)` : ''}`,
     gameFooter: (id: string) => `(jogo ${id} — /quit para sair; tudo é salvo a cada turno)`,
     hintsOn: 'ideias de próximos passos ligadas', hintsOff: 'ideias de próximos passos desligadas', failed: 'Algo deu errado ao resolver isso — nada foi salvo. Tente de novo.',
+    ended: (channel: string) => (channel === 'phone' ? '[A ligação terminou.]' : channel === 'message' ? '[A conversa por mensagens terminou.]' : '[A conversa terminou.]'),
   },
 } as const;
 

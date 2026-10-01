@@ -3,6 +3,7 @@ import type { Character } from '../../domain/types.ts';
 import type { WorldPlanner } from '../../engine/planner.ts';
 import { newId } from '../../engine/util.ts';
 import type { Store } from '../../db/store.ts';
+import { dealOfferKind } from '../deal.ts';
 import type { GamePack, PackAction } from '../types.ts';
 import { KINGKILLER_WORLD } from './world.ts';
 import {
@@ -784,25 +785,7 @@ export const adventurePack: GamePack = {
     st(api).touch(p, api.ctx.now);
     return [`Body: ${before} → ${p.health} health · ${condition(p)}`, `Reputation: ${fameLabel(p.fame)} (${p.fame})`];
   },
-  offerKinds: [{
-    kind: 'deal',
-    summary: 'an agreement: service, protection, a job, a trade — money may change hands',
-    terms: [
-      { key: 'price_offerer_pays', description: 'money the offerer pays the recipient on acceptance', required: false },
-      { key: 'price_offerer_receives', description: 'money the recipient pays the offerer on acceptance', required: false },
-    ],
-    validateTerms: (t) => (Object.values(t).some((v) => v < 0) ? 'prices cannot be negative' : null),
-    resolveSubject: () => ({ subjectRef: null }),
-    describe: (api, o) => {
-      const pays = o.terms.price_offerer_pays, gets = o.terms.price_offerer_receives;
-      return `${o.label ?? o.description}${pays ? ` for ${api.money(Math.round(pays * 100))}` : gets ? ` at ${api.money(Math.round(gets * 100))}` : ''}`;
-    },
-    execute: (api, o) => {
-      const pays = Math.round((o.terms.price_offerer_pays ?? 0) * 100), gets = Math.round((o.terms.price_offerer_receives ?? 0) * 100);
-      const ok = api.payBetween(o.fromCharacterId, o.toCharacterId, pays, o.label ?? 'deal', 'deal') && api.payBetween(o.toCharacterId, o.fromCharacterId, gets, o.label ?? 'deal', 'deal');
-      if (ok) api.results.push(`✓ Deal: ${o.label ?? o.description}`);
-    },
-  }],
+  offerKinds: [dealOfferKind],
   entities: { find: () => undefined, name: (_api, id) => id, controlledBy: () => false },
   actions,
   createTurnState: (store, gameId) => new AdventureState(store, gameId),
@@ -826,7 +809,7 @@ export const adventurePack: GamePack = {
       ...actions.map((a) => `  - ${a.doc}`),
       '  Fights are exchange by exchange: start one with fight; while "Fight in progress" is in the briefing, each player message is exactly one combat_move (minutesElapsed 1) and nothing else combat-related. '
         + 'Read the move from what the player describes (a wild swing is strong, "I watch for an opening" is defend, "I kick the brazier at him" is ground). Reward real tactics with cleverness, never mere flowery words.',
-      '  Offer kinds for make_offer: deal (terms: price_offerer_pays and/or price_offerer_receives; put what is exchanged in label/description).',
+      '  Offer kinds for make_offer: deal (terms: price_offerer_pays / price_offerer_receives on acceptance, price_offerer_pays_later / price_offerer_receives_later when it is done; put what is exchanged in label/description).',
     ].join('\n'),
     director: 'A dangerous world of factions, feuds, debts, rivals, beasts and opportunities. Developments come from people\'s ambitions and grudges, '
       + 'from what the player did (fights are remembered, fame attracts challengers and patrons), and from the player\'s ambition: put chances and prices on the road to it.',

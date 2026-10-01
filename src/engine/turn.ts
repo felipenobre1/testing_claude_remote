@@ -25,7 +25,7 @@ import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
-import { languageName } from '../i18n.ts';
+import { languageName, UI, uiLang } from '../i18n.ts';
 import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
@@ -414,7 +414,7 @@ export class Engine {
       npcOut = await this.callStructured<NpcTurnEnvelope>(trace, 'npc_turn', npcSystemPrompt(target, world.ctx.line, world.ctx.background, world.ctx.violence, world.ctx.language), renderNpcBriefing(perspective, ctxInput),
         'npc_turn', NpcTurnWireSchema, NpcTurnEnvelopeSchema, (out, attempt) => {
           const v = validateChanges(out.changes, vctx);
-          const p = validatePortrayal(out, decision);
+          const p = validatePortrayal(out, decision, this.pack.offerKinds.find((k) => k.kind === decision?.offer.kind)?.terms.map((t) => t.key) ?? []);
           counterTerms = p.counter;
           trace.validation!.push({ attempt, proposals: out.changes, accepted: v.accepted, rejected: v.rejected, portrayal: p.problems });
           return [...v.rejected.map((r: Rejection) => `changes[${r.index}] rejected: ${r.reason}`), ...p.problems];
@@ -508,7 +508,7 @@ export class Engine {
         people: [...new Set([...(interaction?.participantIds ?? []), ...plan.scene.activeCharacterIds])].filter((id) => id !== player.id)
           .map((id) => economy.ctx.characters.find((c) => c.id === id) ?? plan.extraCharacters.find((x) => x.character.id === id)?.character)
           .filter((c): c is Character => Boolean(c)).map((c) => `${c.name} (${c.role}${c.gender ? `, ${c.gender}` : ''})`),
-        newPeople: pending ? [`${pending.character.name} (${pending.character.role}${pending.character.gender ? `, ${pending.character.gender}` : ''}) — ${pending.character.personality}`] : [],
+        newPeople: [pending?.character, beatNewcomer].filter((c): c is Character => Boolean(c)).map((c) => `${c.name} (${c.role}${c.gender ? `, ${c.gender}` : ''}) — ${c.personality}`),
         words, conversationEnded, choice: economy.ctx.player.status === 'dead' ? `None — ${player.name} is dead. Write the death; this is the last passage of the story.` : beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
         resultLines: localized(world.ctx.language) ? results : [],
       });
@@ -531,7 +531,7 @@ export class Engine {
         parts.push(`⚡ ${beat.perceived}${beat.opensConversation ? `\n${beat.opensConversation.name}: “${beat.opensConversation.openingLine.trim()}”` : ''}\n→ ${beat.choice}`);
       }
     }
-    if (conversationEnded) parts.push(`[The ${label(interaction!.channel)} has ended.]`);
+    if (conversationEnded) parts.push(UI[uiLang(world.ctx.language)].ended(interaction!.channel));
     const response = this.response(trace, plan.newGameTime, {
       status: 'committed',
       narration: prose ?? interp.narration,
@@ -922,6 +922,6 @@ export function renderResolution(r: Resolution, offerText: string): string {
     `About: ${offerText}`,
     `Outcome: ${r.outcome}`,
     'Why (your honest reasons):', ...reasons,
-    ...(r.outcome === 'counter' ? [`A counter must respect your limits${counter ? ` (for example: ${counter})` : ''}.`] : []),
+    ...(r.outcome === 'counter' ? [`A counter must respect your limits${counter ? ` (for example: ${counter})` : ''}. counterTerms keys: only the offer's own term keys (${Object.keys(r.counterTerms ?? {}).join(', ') || 'see the offer'}) or other terms of the same kind.`] : []),
   ].join('\n');
 }

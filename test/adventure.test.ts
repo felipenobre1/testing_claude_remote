@@ -709,3 +709,39 @@ test('playtest replay: looking for "an older student" — the narrator introduce
   store.close();
 });
 
+
+test('playtest replay: "1 jot now, 1 when we finish" — the deal pays what it says, the rest is a promise, kept promises pay; endings are in the player\'s language', async () => {
+  const s = start({ beats: true });
+  const quiet = () => interp({ intents: ['general_action'], minutesElapsed: 20, narration: 'You wait.' });
+  s.llm.enqueue('interpret', quiet(), quiet())
+    .enqueue('scene_beat', { kind: 'opportunity', title: 'Lessa wants a lesson', perceived: 'A girl with two coins asks for an hour of training.', involves: ['Oda Venn'], newPerson: null,
+      opensConversation: { name: 'Oda Venn', channel: 'in_person', openingLine: 'An hour of your time. One dram now, one when we finish.' }, choice: 'Take it or not.',
+      offer: { kind: 'deal', label: 'an hour of training', terms: [{ key: 'price_offerer_pays', value: 1 }, { key: 'price_offerer_pays_later', value: 1 }], description: 'Oda pays 1 now and 1 when the hour is done' } });
+  await s.engine.takeTurn({ gameId: s.game.id, input: 'I wait' });
+  const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I keep waiting' });
+  assert.match(r.text, /→ Oda Venn offers you: an hour of training for dr 1\.00 now \+ dr 1\.00 when done/);
+  const offer = s.store.listOffers(s.game.id).find((o) => o.fromCharacterId === s.char('Oda Venn').id)!;
+  s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Oda Venn', relationHint: null }, spokenText: 'Deal.', actions: [{ action: 'respond_to_offer', offerId: offer.id, accept: true }] }))
+    .enqueue('npc_turn', npc({ dialogue: 'Then show me.' }));
+  const acc = await s.engine.takeTurn({ gameId: s.game.id, input: 'Deal' });
+  assert.match(acc.text, /✓ Deal: an hour of training — Oda Venn paid Rhen dr 1\.00/); // the ledger is in the result: the story can't contradict it
+  assert.match(acc.text, /✓ Promise recorded — Oda Venn → Rhen: the rest of the payment for: an hour of training \(dr 1\.00\)/);
+  assert.equal(s.store.getAccountOf(s.game.id, 'character', s.player.id)!.balanceCents, 3_100);
+  const promise = s.store.listObligations(s.game.id).find((o) => o.debtorId === s.char('Oda Venn').id)!;
+  s.llm.enqueue('interpret', interp({ intents: ['speak'], target: { name: 'Oda Venn', relationHint: null }, spokenText: 'Hour\'s up.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Here.', changes: [{ op: 'fulfill_promise', promiseId: promise.id }], endsConversation: true }));
+  const paid = await s.engine.takeTurn({ gameId: s.game.id, input: 'the hour is up' });
+  assert.match(paid.text, /✓ Promise kept — Oda Venn → Rhen: .* \(dr 1\.00 paid\)/);
+  assert.equal(s.store.getAccountOf(s.game.id, 'character', s.player.id)!.balanceCents, 3_200); // a kept promise of money is paid
+  assert.match(paid.text, /\[The conversation has ended\.\]/);
+  s.store.close();
+
+  const pt = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(pt, llm, { pack: adventurePack, rng: fixedRng(0.5), beats: false, narrator: false });
+  const { game } = engine.newGame({ language: 'pt' });
+  llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Oda Venn', relationHint: null }, channel: 'in_person', spokenText: 'Tchau.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Vai.', endsConversation: true }));
+  assert.match((await engine.takeTurn({ gameId: game.id, input: 'tchau' })).text, /\[A conversa terminou\.\]/);
+  pt.close();
+});

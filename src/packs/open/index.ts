@@ -1,4 +1,5 @@
 import { EMPTY_DRAFT } from '../../domain/world.ts';
+import { dealOfferKind } from '../deal.ts';
 import type { GamePack } from '../types.ts';
 
 // ============================================================================
@@ -42,33 +43,14 @@ export const openPack: GamePack = {
       startingScene: { location: 'Tomas\'s rented room near the fish market', description: 'Early morning. Bells from the harbour. A letter has been pushed under the door.' },
     },
   },
-  offerKinds: [{
-    kind: 'deal',
-    summary: 'an agreement: the offerer gives or does something (described in the offer) and money may change hands',
-    terms: [
-      { key: 'price_offerer_pays', description: 'money the offerer pays the recipient on acceptance', required: false },
-      { key: 'price_offerer_receives', description: 'money the recipient pays the offerer on acceptance', required: false },
-    ],
-    validateTerms: (t) => (Object.values(t).some((v) => v < 0) ? 'prices cannot be negative' : null),
-    resolveSubject: () => ({ subjectRef: null }),
-    describe: (api, o) => {
-      const pays = o.terms.price_offerer_pays, gets = o.terms.price_offerer_receives;
-      const price = pays ? ` for ${api.money(cents(pays))}` : gets ? ` at ${api.money(cents(gets))}` : '';
-      return `${o.label ?? o.description}${price}`;
-    },
-    execute: (api, o) => {
-      const pays = Math.round((o.terms.price_offerer_pays ?? 0) * 100), gets = Math.round((o.terms.price_offerer_receives ?? 0) * 100);
-      const ok = api.payBetween(o.fromCharacterId, o.toCharacterId, pays, o.label ?? 'deal', 'deal') && api.payBetween(o.toCharacterId, o.fromCharacterId, gets, o.label ?? 'deal', 'deal');
-      if (ok) api.results.push(`✓ Deal agreed: ${o.label ?? o.description}`);
-    },
-  }],
+  offerKinds: [dealOfferKind],
   entities: { find: () => undefined, name: (_api, id) => id, controlledBy: () => false },
   actions: [],
   createTurnState: () => ({ commit: () => [] }),
   briefing: { player: () => [], npc: () => [] },
   statusParts: () => [],
   prompts: {
-    interpretActions: '  Offer kinds for make_offer: deal (terms: price_offerer_pays and/or price_offerer_receives; put what is exchanged in label/description).',
+    interpretActions: '  Offer kinds for make_offer: deal (terms: price_offerer_pays / price_offerer_receives on acceptance, price_offerer_pays_later / price_offerer_receives_later when it is done; put what is exchanged in label/description).',
     director: 'Developments must come from the world bible, its factions and the people already in play.',
   },
 };

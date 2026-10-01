@@ -155,7 +155,7 @@ export function validateCharacterProposal(p: CharacterProposal, requestedName: s
  * Returns problems plus the counter terms (in cents) to execute.
  */
 export function validatePortrayal(
-  out: NpcTurnEnvelope, decision: { offer: Offer; state: DecisionState; resolution: Resolution } | null,
+  out: NpcTurnEnvelope, decision: { offer: Offer; state: DecisionState; resolution: Resolution } | null, kindTerms: string[] = [],
 ): { problems: string[]; counter: Record<string, number> | null } {
   if (!decision) {
     const problems = [];
@@ -173,7 +173,10 @@ export function validatePortrayal(
   if (!out.counterTerms || !out.counterTerms.terms.length) return { problems: [...problems, 'a counter needs counterTerms with the terms you change'], counter: null };
   const counter: Record<string, number> = { ...offer.terms };
   for (const t of out.counterTerms.terms) {
-    if (!(t.key in offer.terms) && !state.limits.some((l) => l.term === t.key)) problems.push(`counterTerms: "${t.key}" is not a term of this offer`);
+    // A counter may change the offer's terms or add another term of the same kind (e.g. "half now, half when it's done").
+    if (!(t.key in offer.terms) && !kindTerms.includes(t.key) && !state.limits.some((l) => l.term === t.key)) {
+      problems.push(`counterTerms: "${t.key}" is not a term of this offer — use only: ${[...new Set([...Object.keys(offer.terms), ...kindTerms, ...state.limits.map((l) => l.term)])].join(', ')}`);
+    }
     counter[t.key] = t.value;
   }
   if (JSON.stringify(counter) === JSON.stringify(offer.terms)) problems.push('counterTerms must change something about the offer');
