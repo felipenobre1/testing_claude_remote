@@ -14,6 +14,9 @@ export const UI = {
     gameFooter: (id: string) => `(game ${id} — /quit to leave; everything is saved after each turn)`,
     hintsOn: 'next-move ideas on', hintsOff: 'next-move ideas off', failed: 'Something went wrong while resolving that — nothing was saved. Try again.',
     gm: 'Game master', gmThinking: 'the game master is thinking',
+    roll: 'Roll', pressEnter: 'press Enter to roll the d20', you: 'you', vs: 'vs', margin: 'margin', hidden: 'you can\'t tell how it went — you may have been seen',
+    outcomes: { success: 'SUCCESS', partial: 'PARTIAL', failure: 'FAILURE' }, critical: 'natural 20!', fumble: 'natural 1…', diceOn: 'dice on', diceOff: 'dice off (results shown directly)',
+    terms: {} as Record<string, string>,
     ended: (channel: string) => `[The ${channel === 'phone' ? 'call' : channel === 'message' ? 'chat' : 'conversation'} has ended.]`,
   },
   pt: {
@@ -23,6 +26,15 @@ export const UI = {
     gameFooter: (id: string) => `(jogo ${id} — /quit para sair; tudo é salvo a cada turno)`,
     hintsOn: 'ideias de próximos passos ligadas', hintsOff: 'ideias de próximos passos desligadas', failed: 'Algo deu errado ao resolver isso — nada foi salvo. Tente de novo.',
     gm: 'Mestre do jogo', gmThinking: 'o mestre do jogo está pensando',
+    roll: 'Rolagem', pressEnter: 'pressione Enter para rolar o d20', you: 'você', vs: 'contra', margin: 'margem', hidden: 'você não sabe como foi — alguém pode ter visto',
+    outcomes: { success: 'SUCESSO', partial: 'PARCIAL', failure: 'FALHA' }, critical: '20 natural!', fumble: '1 natural…', diceOn: 'dados ligados', diceOff: 'dados desligados (resultados direto)',
+    terms: {
+      combat: 'combate', stealth: 'furtividade', athletics: 'atletismo', survival: 'sobrevivência', perception: 'percepção', persuasion: 'persuasão', deception: 'enganação',
+      lore: 'conhecimento', arcana: 'arcanismo', performance: 'atuação', strength: 'força', agility: 'agilidade', wits: 'astúcia', presence: 'presença',
+      'heavy attack': 'ataque pesado', 'quick attack': 'ataque rápido', guard: 'guarda', feint: 'finta', grapple: 'agarrão', 'use of the ground': 'uso do terreno',
+      against: 'contra', 'break away from the fight': 'escapar da luta', remembers: 'se lembra de', 'a grudge': 'rancor', 'a debt': 'uma dívida', 'good terms': 'em bons termos', how: 'como',
+      difficulty: 'dificuldade', fate: 'destino', 'the upper hand': 'vantagem', tactics: 'tática', 'bare hands': 'mãos nuas', 'no armour': 'sem armadura', wounds: 'ferimentos', tired: 'cansaço',
+    } as Record<string, string>,
     ended: (channel: string) => (channel === 'phone' ? '[A ligação terminou.]' : channel === 'message' ? '[A conversa por mensagens terminou.]' : '[A conversa terminou.]'),
   },
 } as const;

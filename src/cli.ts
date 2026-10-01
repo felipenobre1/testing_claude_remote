@@ -5,6 +5,7 @@ import { exportPlaytest } from './debug/export.ts';
 import { Store } from './db/store.ts';
 import { formatCharacter, formatContext, formatEvents, formatDecisions, formatFacts, formatMoney, formatWorld, formatStatus, formatStatusLine, formatTurn, formatTurnList } from './debug/inspect.ts';
 import { Engine } from './engine/turn.ts';
+import type { RollRecord } from './domain/types.ts';
 import { OpenAIProvider } from './llm/openai.ts';
 import { HttpPageFetcher } from './engine/web.ts';
 import { WorldCreation, type CreationResult } from './engine/creation.ts';
@@ -36,7 +37,7 @@ Live play needs OPENAI_API_KEY (optional: OPENAI_MODEL, default gpt-6-luna).
 While designing: just talk. Commands: /draft (what's decided)  /finalize (show the final summary)  /approve  /abandon  /quit
 In game: type what you do. Ask the game master out of character with /gm <question> or ? <question>
   (or just "I ask the narrator: …"). Commands: /status  /hints (next-move ideas on/off)  /debug  /inspect <what>  /quit
-  Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)  /rolls (dice details on/off)`;
+  Adventure worlds also have: /sheet (your character)  /spend <skill|attribute> (level-up points)  /rolls (dice details on/off)  /dice (press Enter to roll on/off)`;
 
 function parseArgs(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
@@ -113,10 +114,49 @@ function lineReader() {
       rl.prompt();
       return new Promise((r) => { waiter = r; });
     },
+    /** Waits for Enter (a dice roll). Anything typed meanwhile is kept as the next input, never lost. */
+    pause(prompt: string): Promise<void> {
+      if (queue.length || closed) return Promise.resolve();
+      rl.setPrompt(prompt);
+      rl.prompt();
+      return new Promise((r) => { waiter = (l) => { if (l && l.trim()) queue.unshift(l); r(); }; });
+    },
     close: () => rl.close(),
   };
 }
 type Reader = ReturnType<typeof lineReader>;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const n1 = (x: number) => (Math.round(x * 10) / 10).toString();
+const signed = (x: number) => `${x >= 0 ? '+' : '−'}${n1(Math.abs(x))}`;
+
+/** The dice moment: the game master announces the roll, the player presses Enter, the d20 tumbles, the result lands. */
+async function showRolls(reader: Reader, rolls: RollRecord[], lang: UiLang) {
+  const t = UI[lang];
+  // Engine phrases inside a roll ("quick attack against Kesh") in the player's language.
+  const phrases = Object.keys(t.terms).sort((a, b) => b.length - a.length);
+  const term = (text: string) => phrases.reduce((s, k) => s.replace(new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), t.terms[k]!), text);
+  for (const r of rolls) {
+    const mine = r.bonuses.reduce((n, [, v]) => n + v, 0);
+    const theirs = r.against.reduce((n, [, v]) => n + v, 0);
+    console.log(`\n🎲 ${t.roll}: ${term(r.what)}${r.skill !== 'fate' ? ` — ${term(r.skill)}` : ''}`);
+    if (r.bonuses.length) {
+      console.log(`   ${t.you}: ${r.bonuses.map(([k, v]) => `${term(k)} ${k === r.skill ? v : signed(v)}`).join(', ')} = ${n1(mine)}`
+        + `${r.against.length ? `   ${t.vs}   ${r.against.map(([k, v]) => `${term(k)} ${n1(v)}`).join(', ')}` : ''}`);
+    }
+    await reader.pause(`   [${t.pressEnter}] `);
+    for (let i = 0; i < 14; i++) {
+      stdout.write(`\r   🎲 ${String(1 + Math.floor(Math.random() * 20)).padStart(2)} `);
+      await sleep(40 + i * 12);
+    }
+    const flourish = r.die === 20 ? `  ✨ ${t.critical}` : r.die === 1 ? `  💀 ${t.fumble}` : '';
+    const verdict = r.margin === null
+      ? (r.skill === 'fate' ? '' : `  → ? (${t.hidden})`)
+      : `  → ${t.margin} ${signed(r.margin)} · ${r.outcome ? t.outcomes[r.outcome] : ''}`;
+    stdout.write(`\r   🎲 ${String(r.die).padStart(2)}${flourish}${verdict}\x1b[K\n`);
+    await sleep(350);
+  }
+}
 
 /** Shows a live timer while the model works, so a slow reply never looks like a freeze. */
 async function working<T>(label: string, p: Promise<T>, lang: UiLang = 'en'): Promise<T> {
@@ -181,6 +221,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
   const store = engine.store;
   let hints = true;
   let rolls = true; // show what went into each roll: [skill, attribute, difficulty, d20 …]
+  let dice = true; // the dice moment: press Enter to roll, watch the d20 land
   const lang = langOf(store, gameId);
   const t = UI[lang];
   console.log(`\n${intro}\n\n${UI[langOf(store, gameId)].gameFooter(gameId)}\n\n${formatStatusLine(store, gameId)}\n`);
@@ -193,6 +234,7 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       if (line === '/quit' || line === '/exit') break;
       if (line === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue; }
       if (line === '/hints') { hints = !hints; console.log(hints ? t.hintsOn : t.hintsOff); continue; }
+      if (line === '/dice') { dice = !dice; console.log(dice ? t.diceOn : t.diceOff); continue; }
       if (line === '/rolls') { rolls = !rolls; console.log(`dice details ${rolls ? 'on' : 'off'}`); continue; }
       const cmd = line.match(/^\/(\w+)\s*(.*)$/);
       if (cmd && engine.pack.commands?.[cmd[1]!]) { console.log(`\n${engine.pack.commands[cmd[1]!]!.run(store, gameId, cmd[2]!.split(/\s+/).filter(Boolean), lang)}\n`); continue; }
@@ -204,7 +246,9 @@ async function play(reader: Reader, engine: Engine, gameId: string, debug: boole
       }
       const r = await working(/^(\/gm\b|\?)/i.test(line) ? t.gmThinking : t.worldMoving, engine.takeTurn({ gameId, input: line }), lang);
       const ideas = hints && r.suggestions?.length ? `\n\n💡 ${t.ideas}: ${r.suggestions.join(' · ')}` : '';
-      const body = r.status === 'failed' ? t.failed : rolls ? r.text : r.text.replace(/ \[[^\]\n]*\]/g, '');
+      if (dice && r.status === 'committed' && r.rolls?.length) await showRolls(reader, r.rolls, lang);
+      // With the dice shown, the bracketed roll details would only repeat them.
+      const body = r.status === 'failed' ? t.failed : rolls && !(dice && r.rolls?.length) ? r.text : r.text.replace(/ \[[^\]\n]*\]/g, '');
       console.log(`\n${body}${ideas}\n\n${formatStatusLine(store, gameId)}\n`);
       if (r.status === 'failed') console.log(`(error: ${r.error} — /inspect turn last for details)\n`);
       if (debug) console.log(`${formatTurn(store, gameId, 'last')}\n`);

@@ -99,6 +99,10 @@ You don't need to know your character in advance. Say "I remember my mother taug
 - **Never** items, money, titles, powers, or anything that conveniently rewrites the present. One recollection per turn.
 - You start with 3 recollections and earn one per level. `/sheet` shows how many are left and the past you've written so far.
 
+## Rolling the dice
+
+When something you do needs a roll, the game stops and shows it: what you're trying, what you bring (skill, attribute, gear, the upper hand…) against what stands in the way (difficulty, someone's perception, an opponent). Press Enter, the d20 tumbles, and the result lands — margin and SUCCESS / PARTIAL / FAILURE (or "?" when you can't know how it went, like stealth). Then the story continues. `/dice` turns this off (results shown directly); `/rolls` shows or hides the bracketed details.
+
 ## Asking the game master
 
 The story pauses whenever you ask the game master something out of character: `/gm <question>`, `? <question>`, or just "I ask the narrator: …" in a normal message (the interpreter recognises it). The game master answers from what your character could know (the scene, your sheet, your notes, the people you know, the last moments of play) and from the pack's rules. It never reveals secrets or decides outcomes, nothing in the world changes and no time passes. The question and answer are kept in the turn log and the playtest export.

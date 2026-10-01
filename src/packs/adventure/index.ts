@@ -70,14 +70,20 @@ function d20(api: WorldPlanner, label: string): number { return Math.min(20, Mat
  * One uncertain act: skill + attribute bonus − difficulty (− the other side's skill) + d20 (1 → −3 … 20 → +5).
  * `detail` shows the player what went into the roll. For acts where a hidden witness is possible, the margin is not shown.
  */
-function check(api: WorldPlanner, p: Profile, skill: string, difficulty: number, label: string, opposed = 0, opposedLabel = 'resistance', showMargin = true)
+function check(api: WorldPlanner, p: Profile, skill: string, difficulty: number, label: string, opposed = 0, opposedLabel = 'resistance', showMargin = true,
+  what = label.replace(/^[a-z_]+:/, ''))
   : { outcome: CheckOutcome; margin: number; detail: string } {
   const die = d20(api, `check:${label}`);
   const bonus = attrBonus(p, skill);
   const margin = skillLevel(p, skill) + bonus - difficulty - opposed + ((die - 1) / 19) * 8 - 3;
   const attr = SKILL_ATTR[skill as Skill];
   const detail = ` [${skill} ${skillLevel(p, skill)}${attr && bonus ? ` ${attr} ${signed(bonus)}` : ''} − difficulty ${n1(difficulty)}${opposed ? ` − ${opposedLabel} ${n1(opposed)}` : ''} · d20 ${die}${showMargin ? ` → ${signed(margin)}` : ''}]`;
-  return { outcome: margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure', margin, detail };
+  const outcome: CheckOutcome = margin >= 1.5 ? 'success' : margin >= -1 ? 'partial' : 'failure';
+  if (p.characterId === api.ctx.player.id) {
+    api.rolls.push({ what, skill, bonuses: [[skill, skillLevel(p, skill)], ...(attr && bonus ? [[attr, bonus] as [string, number]] : [])],
+      against: [['difficulty', difficulty], ...(opposed ? [[opposedLabel, opposed] as [string, number]] : [])], die, margin: showMargin ? margin : null, outcome: showMargin ? outcome : null });
+  }
+  return { outcome, margin, detail };
 }
 
 /** Maximum health comes from the body: 70 + strength × 10, +5 per level after the first. */
@@ -115,6 +121,9 @@ const MATCHUP: Record<Move, Record<Move, number>> = {
 /** What an opponent's winning move looks like. */
 const FOE_HIT: Record<Move, string> = { strong: 'lands a heavy blow', quick: 'gets a quick strike in', defend: 'blocks and counters', feint: 'fakes you out and strikes',
   grapple: 'gets hold of you and throws you', ground: 'uses the ground against you' };
+/** What it looks like when the opponent's move only half lands. */
+const FOE_GRAZE: Record<Move, string> = { strong: 'catches you with the edge of a heavy blow', quick: 'clips you', defend: 'blocks and nicks you on the counter', feint: 'fakes you out and grazes you',
+  grapple: 'gets a brief hold and shoves you hard', ground: 'uses the ground and catches you off balance' };
 const STAMINA_COST: Record<Move, number> = { strong: 15, quick: 8, defend: -10, feint: 6, grapple: 12, ground: 6 };
 const HIT: Record<Move, [number, number]> = { strong: [12, 22], quick: [7, 13], defend: [6, 11], feint: [5, 9], grapple: [5, 9], ground: [8, 14] };
 const STYLE_MOVES: Record<Combatant['style'], [Move, number][]> = {
@@ -193,7 +202,7 @@ function exchange(api: WorldPlanner, e: Encounter, m: { move: Move | 'disengage'
   if (m.move === 'yield') { endEncounter(api, e, 'yielded'); return; }
   if (m.move === 'disengage') {
     const hardest = Math.max(...fighting().map((o) => o.threat));
-    const { outcome, detail } = check(api, player, 'athletics', hardest * 0.8, `${label}:flee`);
+    const { outcome, detail } = check(api, player, 'athletics', hardest * 0.8, `${label}:flee`, 0, 'resistance', true, 'break away from the fight');
     if (outcome !== 'failure') { api.results.push(`🏃 You break away.${detail}`); endEncounter(api, e, 'fled'); return; }
     lines.push(`🏃 You try to break away and can't.${detail}`);
     m = { ...m, move: 'defend', cleverness: -1 };
@@ -210,6 +219,10 @@ function exchange(api: WorldPlanner, e: Encounter, m: { move: Move | 'disengage'
   const detail = ` [you ${n1(power.total)} (${power.parts.filter(([k, v]) => v !== 0 || k === 'combat' || k === BARE).map(([k, v]) => `${k} ${k === 'combat' ? v : signed(v)}`).join(', ')})`
     + `${matchup ? ` ${MOVE_LABEL[move]} vs ${MOVE_LABEL[theirMove]} ${signed(matchup)}` : ''}${e.playerAdvantage ? ` advantage ${signed(e.playerAdvantage)}` : ''}${clever ? ` tactics ${signed(clever)}` : ''}`
     + ` vs ${target.name} ${n1(theirs)} · d20 ${die} → ${signed(margin)}]`;
+  api.rolls.push({ what: `${MOVE_LABEL[move]} against ${target.name}`, skill: 'combat',
+    bonuses: [...power.parts.filter(([k, v]) => v !== 0 || k === 'combat'), ...(matchup ? [[`${MOVE_LABEL[move]} vs ${MOVE_LABEL[theirMove]}`, matchup] as [string, number]] : []),
+      ...(e.playerAdvantage ? [['the upper hand', e.playerAdvantage] as [string, number]] : []), ...(clever ? [['tactics', clever] as [string, number]] : [])],
+    against: [[target.name, theirs]], die, margin, outcome: margin >= 0.5 ? 'success' : margin > -0.5 ? 'partial' : 'failure' });
   e.playerStamina = clamp(e.playerStamina - STAMINA_COST[move], 0, 100);
   target.stamina = clamp(target.stamina - STAMINA_COST[theirMove], 0, 100);
 
@@ -226,7 +239,7 @@ function exchange(api: WorldPlanner, e: Encounter, m: { move: Move | 'disengage'
     const amount = Math.max(1, dmg(HIT[attackerMove], k) - armorCut());
     const n = full ? amount : Math.ceil(amount / 2);
     const wound = hurt(api, player, n, `${label}:${k}`, attacker.intent === 'kill' && !spar, spar || attacker.blunt);
-    return `${attacker.name} ${FOE_HIT[attackerMove]}${full ? '' : ' (a glancing blow)'} — ${wound} (−${n}; ${player.health}/${player.maxHealth})`;
+    return `${attacker.name} ${full ? FOE_HIT[attackerMove] : FOE_GRAZE[attackerMove]} — ${wound} (−${n}; ${player.health}/${player.maxHealth})`;
   };
 
   let what: string;
@@ -355,11 +368,12 @@ const actions: PackAction[] = [
       style: STYLE,
       intent: z.enum(['kill', 'subdue', 'drive_off', 'defend', 'duel', 'spar']),
       weaponName: z.string().max(80).nullable(),
+      theirWeapon: z.string().max(80).nullable(), // what the opponent fights with; null = bare hands
       witnessed: z.boolean(), // others see it (fame)
       guards: z.strictObject({ who: z.string().min(2).max(120), count: z.number(), threat: z.number() }).nullable(), // who protects the target here, if anyone
       ...moveFields,
     }),
-    doc: `fight: the player STARTS a fight (attacks, accepts a challenge, a sparring bout). Fights last several exchanges: this is the first; later ones are combat_move. opponent = exact name of a known person or a short description of one of them; count = how many; threat 1 (weak) … 5 (deadly) — honest; style = how they fight (aggressive/defensive/tricky/brute); intent (spar for agreed practice: bruises, not wounds); weaponName from what the player carries, or null for bare hands. guards: if the target is protected HERE (a lord with guards, a merchant with bodyguards), who, how many and how dangerous — the player must get through them first; null if the target is alone. move = the player's opening move: ${MOVE_DOC}. how = their move in a few words; cleverness −1…2 (2 only for genuinely clever use of the situation). The game decides every exchange — never narrate who wins.`,
+    doc: `fight: the player STARTS a fight (attacks, accepts a challenge, a sparring bout). Fights last several exchanges: this is the first; later ones are combat_move. opponent = exact name of a known person or a short description of one of them; count = how many; threat 1 (weak) … 5 (deadly) — honest; style = how they fight (aggressive/defensive/tricky/brute); intent (spar for agreed practice: bruises, not wounds); weaponName from what the player carries, or null for bare hands; theirWeapon = what the opponent fights with ("a club", "a knife", "training sword"), or null for bare hands — fists bruise, blades cut. guards: if the target is protected HERE (a lord with guards, a merchant with bodyguards), who, how many and how dangerous — the player must get through them first; null if the target is alone. move = the player's opening move: ${MOVE_DOC}. how = their move in a few words; cleverness −1…2 (2 only for genuinely clever use of the situation). The game decides every exchange — never narrate who wins.`,
     handle: (api, a) => {
       const current = activeEncounter(api);
       if (current) { exchange(api, current, { move: a.move as Move, targetName: String(a.opponent), how: String(a.how), cleverness: Number(a.cleverness) }); return null; }
@@ -371,12 +385,14 @@ const actions: PackAction[] = [
       // Whoever you try to kill fights for their life; a duel with a deadly opponent is to the death.
       const foeIntent: FoeIntent = playerIntent === 'spar' ? 'spar' : playerIntent === 'kill' || (playerIntent === 'duel' && threat >= 4) ? 'kill' : 'hurt';
       const guards = a.guards as { who: string; count: number; threat: number } | null;
+      const theirWeapon = (a.theirWeapon as string | null) ?? null;
+      const blunt = !theirWeapon || BLUNT.test(theirWeapon);
       const group = (name: string, n: number, t: number, intent: FoeIntent, protects: string | null) =>
-        Array.from({ length: clamp(Math.round(n), 1, 4) }, (_, i) => newCombatant(api, { name: n > 1 ? `${name} ${i + 1}` : name, threat: t, intent, style: a.style as Combatant['style'], blunt: BLUNT.test(name), protects }));
+        Array.from({ length: clamp(Math.round(n), 1, 4) }, (_, i) => newCombatant(api, { name: n > 1 ? `${name} ${i + 1}` : name, threat: t, intent, style: a.style as Combatant['style'], blunt: protects ? false : blunt, protects }));
       const target = named?.name ?? String(a.opponent);
       const opponents = guards
         ? group(guards.who, guards.count, clamp(Math.round(Number(guards.threat)), 1, 5), playerIntent === 'kill' ? 'kill' : 'hurt', target)
-        : named ? [newCombatant(api, { named, name: named.name, threat, intent: foeIntent, style: a.style as Combatant['style'], blunt: playerIntent === 'spar' })]
+        : named ? [newCombatant(api, { named, name: named.name, threat, intent: foeIntent, style: a.style as Combatant['style'], blunt: playerIntent === 'spar' || blunt })]
           : group(String(a.opponent), Number(a.count), threat, foeIntent, null);
       const e = startEncounter(api, { kind: playerIntent === 'spar' ? 'spar' : 'fight', aggressor: 'player', playerIntent, target: guards ? target : null,
         witnessed: Boolean(a.witnessed), weaponName: (a.weaponName as string | null) ?? BARE, opponents });

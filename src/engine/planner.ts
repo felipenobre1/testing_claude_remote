@@ -1,7 +1,7 @@
 import { priceKey, type PriceEntry, type Store } from '../db/store.ts';
 import type { DecisionState, PlayerAction } from '../domain/schemas.ts';
 import type {
-  Account, Character, DecisionRecord, GameEvent, Interaction, Knowledge, Obligation, Offer, RecurringPayment, ScheduledItem, StoryThread, Transaction,
+  Account, Character, DecisionRecord, GameEvent, Interaction, Knowledge, Obligation, Offer, RecurringPayment, RollRecord, ScheduledItem, StoryThread, Transaction,
 } from '../domain/types.ts';
 import type { GamePack, PackTurnState } from '../packs/types.ts';
 import { MAX_ATTEMPTS, reconsiderAfterMinutes, type Resolution } from './decision.ts';
@@ -88,6 +88,8 @@ export class WorldPlanner {
   readonly rejected: { action: unknown; reason: string }[] = [];
   /** Outcomes this turn that people present witnessed (fights, feats) — the NPC's portrayal must be consistent with them. */
   readonly witnessed: string[] = [];
+  /** Dice the player rolled this turn, for the interface. */
+  readonly rolls: RollRecord[] = [];
   readonly ctx: PlanContext;
   readonly packState: PackTurnState;
 
@@ -400,8 +402,9 @@ export class WorldPlanner {
         } else if (act.kind === 'acquaintance' && act.acquaintance) {
           // The past cuts both ways.
           const x = act.acquaintance;
-          const roll = this.random(`recall:${x.name}`);
-          const terms = roll < 0.35 ? `they hold something against ${player.name} from back then` : roll < 0.7 ? `${player.name} owes them something — or they will want something` : 'they parted on good terms';
+          const die = Math.min(20, Math.floor(this.random(`recall:${x.name}`) * 20) + 1);
+          const terms = die <= 7 ? `they hold something against ${player.name} from back then` : die <= 14 ? `${player.name} owes them something — or they will want something` : 'they parted on good terms';
+          this.rolls.push({ what: `how ${x.name} remembers ${player.name} (1–7 a grudge · 8–14 a debt · 15–20 good terms)`, skill: 'fate', bonuses: [], against: [], die, margin: null, outcome: null });
           topic = `contact: ${x.name}`;
           belief = `${x.role} — ${x.where}. Knew ${player.name} in the past (${act.memory}); ${terms}. Has not seen ${player.name} since.`;
           effect = `${x.name}, ${x.role} (${x.where}) — ${terms}`;

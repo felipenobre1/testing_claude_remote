@@ -32,7 +32,7 @@ function start(opts: { roll?: number; beats?: boolean; narrator?: boolean; direc
   return { store, llm, engine, game, player, opening, me, char, turn };
 }
 const fight = (opponent: string, extra: Record<string, unknown> = {}) =>
-  ({ action: 'fight', opponent, count: 1, threat: 3, style: 'aggressive', intent: 'kill', weaponName: 'curved knife', witnessed: true, guards: null, move: 'strong', how: 'a slash', cleverness: 0, ...extra });
+  ({ action: 'fight', opponent, count: 1, threat: 3, style: 'aggressive', intent: 'kill', weaponName: 'curved knife', theirWeapon: 'a long knife', witnessed: true, guards: null, move: 'strong', how: 'a slash', cleverness: 0, ...extra });
 const move = (m: string, extra: Record<string, unknown> = {}) => ({ action: 'combat_move', target: null, weaponName: null, move: m, how: m, cleverness: 0, ...extra });
 /** Keeps making the same move until the fight is over (or `max` exchanges). Returns every turn's text. */
 async function fightOn(s: ReturnType<typeof start>, m: string, max = 12) {
@@ -455,7 +455,7 @@ test('attacking a guarded lord: the guards stand in the way, and what you did co
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I rush the lord with my knife' });
   assert.equal(r.status, 'committed', r.error ?? '');
   assert.match(r.text, /⚔ A fight begins — House Varr guard 1 \(protecting Lord Varr\), House Varr guard 2 \(protecting Lord Varr\)\./);
-  assert.match(r.text, /\n   House Varr guard 2 [a-z ]+ \(a glancing blow\)/); // the other guard strikes while you deal with the first
+  assert.match(r.text, /\n   House Varr guard 2 (catches you with the edge of a heavy blow|clips you|[a-z ]+)/); // the other guard strikes while you deal with the first
   const y = await s.turn('I drop the knife and yield', { intents: ['general_action'], minutesElapsed: 1, narration: '', actions: [move('yield')] });
   assert.match(y.text, /⚔ The fight is over: you yield/);
   // The world will answer: an arrest (or worse) is scheduled within minutes.

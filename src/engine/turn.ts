@@ -547,6 +547,7 @@ export class Engine {
         : null,
       conversationEnded,
       results,
+      ...(economy.rolls.length ? { rolls: economy.rolls } : {}),
       text: parts.filter(Boolean).join('\n\n') || '(Nothing much happens.)',
       suggestions: economy.ctx.player.status === 'dead' ? [] : narration?.suggestions.length ? narration.suggestions : (interp.suggestions ?? []),
       ...(economy.ctx.player.status === 'dead' ? { gameOver: true } : {}),

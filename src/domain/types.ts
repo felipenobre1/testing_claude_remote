@@ -313,6 +313,17 @@ export interface Scene {
 
 export type TurnStatus = 'committed' | 'clarification' | 'failed';
 
+/** A roll the player made this turn, for showing the dice: what went in on each side, the d20, and (unless hidden) how it came out. */
+export interface RollRecord {
+  what: string; // what was attempted
+  skill: string;
+  bonuses: [string, number][]; // what the player brings (skill, attribute, gear, the upper hand…)
+  against: [string, number][]; // what stands against them (difficulty, someone's perception, an opponent)
+  die: number; // the d20
+  margin: number | null; // null when the result is hidden (stealth, theft: you may not know you were seen)
+  outcome: 'success' | 'partial' | 'failure' | null;
+}
+
 export interface TurnResponse {
   requestId: string;
   turnId: string;
@@ -324,6 +335,8 @@ export interface TurnResponse {
   clarificationQuestion: string | null;
   error: string | null;
   results: string[]; // deterministic outcomes: payments, company changes, offers, promises, time effects
+  /** The dice the player rolled this turn (in order), for the interface to show. */
+  rolls?: RollRecord[];
   text: string; // fully composed player-facing text
   /** Ideas for what the player could do next (grounded in their situation; never outcomes). */
   suggestions?: string[];
