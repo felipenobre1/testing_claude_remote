@@ -195,10 +195,10 @@ test('feats, rest, training and gear', async () => {
   assert.match(rest.text, /🛏 Rested 8h: health \d+ → \d+ · healed: a cut to the/);
   assert.equal(s.me().injuries.length, 0);
   const tooDear = await s.turn('I buy a short sword', { intents: ['general_action'], minutesElapsed: 20, narration: '',
-    actions: [{ action: 'acquire_item', name: 'short sword', kind: 'weapon', quality: 2, quantity: 1, how: 'bought', price: 120 }] });
+    actions: [{ action: 'acquire_item', name: 'short sword', kind: 'weapon', quality: 2, quantity: 1, how: 'bought', price: 120, from: 'the armourer in the market' }] });
   assert.match(tooDear.text, /✗ You can't afford short sword \(dr 120\.00; you have dr 30\.00\)/);
   const knife = await s.turn('I buy a cheap spare knife', { intents: ['general_action'], minutesElapsed: 20, narration: '',
-    actions: [{ action: 'acquire_item', name: 'spare knife', kind: 'weapon', quality: 0, quantity: 1, how: 'bought', price: 6 }] });
+    actions: [{ action: 'acquire_item', name: 'spare knife', kind: 'weapon', quality: 0, quantity: 1, how: 'bought', price: 6, from: 'a stall in the market' }] });
   assert.match(knife.text, /🎒 Bought: spare knife \(crude weapon\)/);
   assert.equal(s.store.getAccountOf(s.game.id, 'character', s.player.id)!.balanceCents, 2_400);
   s.store.close();
@@ -708,7 +708,7 @@ test('someone named by a role gets a real name; fists bruise', async () => {
   s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Kesh Adar', relationHint: null }, channel: 'in_person', spokenText: 'Coward.' }))
     .enqueue('npc_turn', npc({ dialogue: 'Say it again.', attack: { intent: 'hurt', threat: 3, how: 'a fist to the jaw', by: null } }));
   const r = await s.engine.takeTurn({ gameId: s.game.id, input: 'I insult Kesh' });
-  assert.match(r.text, /⚔ Exchange 1 · your guard vs Kesh Adar's heavy attack: Kesh Adar lands a heavy blow — a bruise on the/);
+  assert.match(r.text, /⚔ Exchange 1 · your guard vs Kesh Adar's heavy attack: Kesh Adar lands a heavy punch — a bruise on the/);
   s.store.close();
 });
 
@@ -898,3 +898,29 @@ test('streaming: the passage reaches the reader as it is written; the dice come 
   assert.equal(s.llm.callsFor('narrate').length, 1); // no retry: the reader already has the passage
   s.store.close();
 });
+
+test('playtest replay: no sword out of nowhere; routine orders simply happen; a servant attacked by his lord runs', async () => {
+  const s = start({ roll: 0.5 });
+  // "Pego a espada" — he carries a knife, not a sword: nothing appears.
+  let r = await s.turn('I grab my sword', { intents: ['general_action'], minutesElapsed: 0, narration: '',
+    actions: [{ action: 'acquire_item', name: 'sword', kind: 'weapon', quality: 1, quantity: 1, how: 'found', price: null, from: 'my belt' }] });
+  assert.match(r.text, /✗ sword: you don't have one/);
+  r = await s.turn('Oda hands me a blade', { intents: ['general_action'], minutesElapsed: 0, narration: '',
+    actions: [{ action: 'acquire_item', name: 'long knife', kind: 'weapon', quality: 1, quantity: 1, how: 'given', price: null, from: 'Oda Venn' }] });
+  assert.match(r.text, /✗ Nobody here gave you long knife\./); // Oda isn't here
+  assert.deepEqual(advRepo.items(s.store, s.game.id).filter((i) => i.ownerId === s.player.id).map((i) => i.name), ['curved knife', 'padded desert coat']);
+  const system = s.llm.callsFor('interpret')[0]!.system;
+  assert.match(system, /Routine help from people at Rhen's disposal .* simply HAPPENS/);
+  assert.match(system, /never special items, weapons, money or people that are not in the briefing/);
+  assert.match(system, /Drawing, grabbing or using something they ALREADY carry \(see Carrying\) is never acquire_item/);
+
+  // He draws on his groom: the groom has nothing in his hands and is no fighter — he keeps out of reach, and runs.
+  r = await s.turn('I draw my knife on the groom', { intents: ['general_action'], minutesElapsed: 1, narration: '',
+    actions: [{ action: 'fight', opponent: 'the groom', count: 1, threat: 1, style: 'fearful', intent: 'kill', weaponName: 'curved knife', theirWeapon: null, witnessed: true, guards: null, move: 'strong', how: 'a cut at his neck', cleverness: 0 }] });
+  assert.doesNotMatch(r.text, /holds guard|blade/);
+  const texts = [r.text, ...await fightOn(s, 'strong')];
+  assert.ok(texts.some((t) => /the groom breaks away and runs|the groom: (dead|down)/.test(t)), texts.join('\n---\n'));
+  assert.equal(advRepo.encounter(s.store, s.game.id), null);
+  s.store.close();
+});
+

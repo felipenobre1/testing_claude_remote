@@ -142,9 +142,9 @@ export const DANELAW_WORLD: WorldDraft = {
       { key: 'persuasion', value: 2 }, { key: 'deception', value: 1 }, { key: 'lore', value: 2 }, { key: 'arcana', value: 0 }, { key: 'performance', value: 1 }, { key: 'fame', value: 2 },
     ],
     location: 'the toll-house inside the walls of Durobrivae',
-    circumstances: ['keeps the market peace at Durobrivae and takes a share of the tolls', 'has no lord, no army and no kin left alive in the valley', 'much of his past is not yet written — he will remember it as he goes'],
+    circumstances: ['keeps the market peace at Durobrivae and takes a share of the tolls', 'has no lord, no army and no kin left alive in the valley', 'a groom and an old gatekeeper serve the toll-house', 'much of his past is not yet written — he will remember it as he goes'],
     startingMoney: 40, currency: { code: 'PEN', symbol: 'd ' },
-    possessions: ['a seax at his belt', 'a wax tablet and stylus', 'his father\'s silver arm-ring'],
+    possessions: ['a seax at his belt', 'a wax tablet and stylus', 'his father\'s silver arm-ring', 'his grey mare, stabled inside the walls'],
     knowledge: [
       'Wulfstan, thegn of Ealdwic, was found at dawn yesterday in Ketil\'s longhouse at Ketilsby with his throat cut; a Norse axe lay beside him',
       'Two days before, Hrafn Ketilsson fought Wulfstan\'s men at the ford over a stolen ewe, in front of half the valley',

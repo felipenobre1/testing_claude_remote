@@ -25,7 +25,8 @@ export interface Combatant {
   maxHealth: number;
   stamina: number; // 0–100
   advantage: number; // 0–3, momentum from winning exchanges
-  style: 'aggressive' | 'defensive' | 'tricky' | 'brute';
+  style: 'aggressive' | 'defensive' | 'tricky' | 'brute' | 'fearful';
+  weapon?: string | null; // what they fight with; null = bare hands
   intent: FoeIntent;
   blunt: boolean; // fists/clubs/training weapons: bruises, not cuts
   status: 'fighting' | 'down' | 'yielded' | 'fled' | 'dead';
