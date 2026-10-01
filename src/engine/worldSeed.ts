@@ -56,6 +56,12 @@ export function compileDraft(draft: WorldDraft, packs: GamePack[], opts: { gameI
       if (who.toLowerCase() !== 'player' && !actorNames.includes(who.toLowerCase())) problems.push(`situation "${s.title}" involves "${who}", who is not a starting character`);
     }
   }
+  for (const x of draft.secrets) {
+    for (const who of x.knownBy) if (!actorNames.includes(who.toLowerCase())) problems.push(`a hidden truth is known by "${who}", who is not a starting character`);
+  }
+  for (const dl of draft.deadlines) {
+    if (!TIME_RE.test(dl.when) || (draft.setting.startDate && dl.when < draft.setting.startDate)) problems.push(`the deadline "${dl.what.slice(0, 60)}" needs a date/time after the start`);
+  }
   if (problems.length) return { seed: null, problems };
 
   const d = draft;
@@ -83,6 +89,7 @@ export function compileDraft(draft: WorldDraft, packs: GamePack[], opts: { gameI
     economy: d.economy,
     openLeads: d.openLeads,
     startingScene: { location: d.startingScene.location!, description: d.startingScene.description! },
+    secrets: d.secrets, clues: d.clues.map((c) => ({ ...c, difficulty: Math.min(5, Math.max(1, Math.round(c.difficulty))) })), deadlines: d.deadlines,
   };
   return { seed, problems: [] };
 }
@@ -150,6 +157,15 @@ export function createGameFromSeed(store: Store, pack: GamePack, seed: WorldSeed
     });
     for (const l of seed.openLeads.filter((x) => x.when)) schedule(l.when!, 'opportunity', { ...l });
     schedule(nextWeekStart(seed.world.startDate), 'weekly_report', { since: seed.world.startDate });
+    // A deadline is a consequence already on the calendar: when it comes due, the world must answer it — unless the player changed it.
+    for (const dl of seed.deadlines ?? []) schedule(dl.when, 'consequence', { summary: `DEADLINE — this happens now unless what the player did has changed it: ${dl.what}` });
+    // Hidden truths live in the minds of those who know them (each acts on it in their own way); nobody else can see them.
+    for (const x of seed.secrets ?? []) {
+      for (const who of x.knownBy) {
+        store.upsertKnowledge({ id: newId('know'), gameId, characterId: idOf(who), topic: `secret: ${x.truth.slice(0, 100)}`, belief: x.truth, confidence: 1, aboutCharacterId: null,
+          factId: null, source: 'seed', sourceEventId: null, gameTime: seed.world.startDate, createdAt: now, updatedAt: now });
+      }
+    }
     store.insertScene({ id: newId('scn'), gameId, location: seed.startingScene.location, description: seed.startingScene.description,
       activeCharacterIds: [player.id], interactionId: null, updatedAt: now });
     // Starting conditions as observed world truth — causes, not outcomes.
@@ -171,11 +187,21 @@ export function openingText(seed: WorldSeed): string {
     seed.world.currentSituation, '',
     ...(seed.initialPressures.length ? [...seed.initialPressures, ''] : []),
     ...(soon.length ? ['Coming up:', ...soon.map((l) => `  • ${formatGameTime(l.when!)} — ${l.title}${l.location ? ` (${l.location})` : ''}`), ''] : []),
+    ...(seed.deadlines?.length ? seed.deadlines.map((x) => `⚠ ${formatGameTime(x.when)} — ${x.what}`).concat(['']) : []),
     'What do you do?',
   ].join('\n');
 }
 
 const addDays = (t: string, n: number) => new Date(new Date(`${t}:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 16);
+
+/** The story's hidden truths, for the storytellers that move the world (director, scene beats) — never the narrator, the game master or the player. */
+export function secretsText(seed: WorldSeed): string {
+  if (!seed.secrets?.length) return '';
+  return ['', 'THE HIDDEN TRUTH (the storyteller\'s secret — never reveal it in what the player perceives; let it decide what people do, say and hide, and keep every development consistent with it. The player uncovers it only by investigating, asking and pressing the right people):',
+    ...seed.secrets.map((x) => `- ${x.truth} (known to: ${x.knownBy.join(', ') || 'nobody alive'})`),
+    ...(seed.clues?.length ? ['Physical traces that exist (the player finds them by looking closely):', ...seed.clues.map((c) => `- at ${c.place}: ${c.finding}`)] : []),
+  ].join('\n');
+}
 
 /** The design contract, as every Story Director call sees it (it must not drift over a long game). */
 export function bibleText(seed: WorldSeed): string {
@@ -236,6 +262,8 @@ export function seedSummary(seed: WorldSeed, pack: GamePack): string {
     ...moneyLines(seed, money ? (p.currency?.symbol ?? pack.currency.symbol) : pack.currency.symbol),
     ...(seed.openLeads.length ? [`Open leads: ${seed.openLeads.map((l) => `${l.title}${l.when ? ` (${formatGameTime(l.when)}${l.repeatsWeekly ? ', weekly' : ''})` : ''}`).join('; ')}.`] : []),
     ...(seed.initialSituations.length ? [`Situations already in motion (no set outcomes): ${seed.initialSituations.map((s) => s.title).join('; ')}.`] : []),
+    ...(seed.secrets?.length ? [`Hidden truths: ${seed.secrets.length} (kept secret from you in play — uncover them).`] : []),
+    ...(seed.deadlines?.length ? [`Deadlines: ${seed.deadlines.map((x) => `${formatGameTime(x.when)} — ${x.what}`).join('; ')}.`] : []),
     `World behaviour: ${pack.worldCreation.summary}. New people are created when needed; the world continues without you.`,
     `Starting scene: ${seed.startingScene.location} — ${formatGameTime(seed.world.startDate)}.`,
   ].join('\n');
@@ -269,6 +297,8 @@ export function draftView(d: WorldDraft): string {
     line('Open leads', d.openLeads.map((l) => `${l.title}${l.when ? ` @ ${l.when}` : ''}`)),
     line('Circumstances', d.player.circumstances), line('People at the start', d.actors.map((a) => `${a.name} (${a.role})`)),
     line('Current situation', d.currentSituation), line('Pressures', d.initialPressures), line('Situations in motion', d.initialSituations.map((s) => s.title)),
+    line('Hidden truths', d.secrets.length ? `${d.secrets.length} decided (kept from the player in play)` : null), line('Clues', d.clues.length ? `${d.clues.length}` : null),
+    line('Deadlines', d.deadlines.map((x) => `${x.when} — ${x.what}`)),
     line('Opening scene', d.startingScene.location ? `${d.startingScene.location} — ${d.startingScene.description ?? ''}` : null),
     line('Still open', d.unresolvedQuestions), line('Contradictions to resolve', d.contradictions),
   ].filter(Boolean).join('\n') || '(nothing decided yet)';

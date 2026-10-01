@@ -130,6 +130,12 @@ export const WorldDraftSchema = z.object({
   initialPressures: z.array(text(240)).max(6),
   initialSituations: z.array(DraftSituationSchema).max(4),
   startingScene: z.strictObject({ location: opt(160), description: opt(600) }),
+  /** The story's hidden truths (a mystery's answer, a betrayal, a plot) — decided now so they can't drift, never told to the player. */
+  secrets: z.array(z.strictObject({ truth: text(600), knownBy: z.array(z.string().max(80)).max(6) })).max(8), // knownBy: starting characters who know it
+  /** Physical traces the player can find by looking closely (investigate): where, what is found, and the skill and difficulty (1–5) it takes. */
+  clues: z.array(z.strictObject({ place: text(160), finding: text(400), skill: text(40), difficulty: z.number() })).max(10),
+  /** What will happen at a fixed time unless the player changes it (an army marches, a ship sails, a verdict is due). */
+  deadlines: z.array(z.strictObject({ when: text(16), what: text(400) })).max(4),
   unresolvedQuestions: z.array(text(240)).max(8),
   contradictions: z.array(text(300)).max(6), // incompatible requirements still to be resolved
 });
@@ -144,7 +150,7 @@ export const EMPTY_DRAFT: WorldDraft = {
     circumstances: [], startingMoney: null, currency: null, possessions: [], knowledge: [], assets: [] },
   economy: { priceList: [], livingCosts: [], income: [] }, openLeads: [],
   locations: [], factions: [], actors: [], historicalContext: null, currentSituation: null, initialPressures: [], initialSituations: [],
-  startingScene: { location: null, description: null }, unresolvedQuestions: [], contradictions: [],
+  startingScene: { location: null, description: null }, secrets: [], clues: [], deadlines: [], unresolvedQuestions: [], contradictions: [],
 };
 
 export const COPILOT_INTENTS = ['discuss', 'summarize', 'request_finalize', 'confirm_finalize', 'abandon'] as const;
@@ -225,4 +231,8 @@ export interface WorldSeed {
   economy: WorldDraft['economy'];
   openLeads: WorldDraft['openLeads'];
   startingScene: { location: string; description: string };
+  /** Absent in seeds created before mysteries existed. Never shown to the player, the narrator or the game master. */
+  secrets?: WorldDraft['secrets'];
+  clues?: WorldDraft['clues'];
+  deadlines?: WorldDraft['deadlines'];
 }

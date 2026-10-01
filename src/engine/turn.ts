@@ -17,14 +17,14 @@ import {
   gameMasterSystemPrompt, interpretSystemPrompt, npcSystemPrompt, type WorldContext,
 } from './prompts.ts';
 import { newTrace, type Trace, type WriteRecord } from './trace.ts';
-import { addMinutes, formatGameTime, newId } from './util.ts';
+import { addMinutes, foldName, formatGameTime, newId } from './util.ts';
 import { decisionStateProblems, validateChanges, validateCharacterProposal, validatePortrayal, type AcceptedChange, type Rejection } from './validate.ts';
 import { extractUrls, type PageFetcher } from './web.ts';
 import { applyOps, npcThreadsBriefing, npcWorldBriefing, opportunityLine, playerWorldBriefing, upcoming, WorldPlanner, type PlanContext } from './planner.ts';
 import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
-import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
+import { backgroundOf, bibleText, compileDraft, createGameFromSeed, secretsText, worldLine } from './worldSeed.ts';
 import { languageName, UI, uiLang } from '../i18n.ts';
 import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
@@ -148,7 +148,8 @@ export class Engine {
   }
 
   /** The game's setting and design contract, from its immutable WorldSeed. */
-  private worldOf(gameId: string): { ctx: WorldContext; bible: string; seed: WorldSeed; pack: GamePack } {
+  /** bible: the public design contract (narrator, game master). storyBible: the bible plus the hidden truth, for those who move the world (director, scene beats). */
+  private worldOf(gameId: string): { ctx: WorldContext; bible: string; storyBible: string; seed: WorldSeed; pack: GamePack } {
     let seed = this.store.getWorldSeed<WorldSeed>(gameId);
     if (!seed) {
       // Saves from before World Creation: fall back to the pack's template world (not persisted).
@@ -157,7 +158,7 @@ export class Engine {
     // A world may set its own currency at creation; the pack's is the default.
     const pack = seed.player.currency ? { ...this.pack, currency: seed.player.currency } : this.pack;
     return {
-      seed, bible: bibleText(seed), pack,
+      seed, bible: bibleText(seed), storyBible: bibleText(seed) + secretsText(seed), pack,
       ctx: { line: worldLine(seed), rules: seed.world.rules, homes: `somewhere plausible in or near ${seed.world.place}`, background: backgroundOf(seed), violence: seed.style.violence ?? 'non_graphic', language: seed.style.language || 'English' },
     };
   }
@@ -469,7 +470,7 @@ export class Engine {
 
     // 6. The world turn: time passes for everyone, not just the player.
     trace.world = await runWorldTurn(economy, t0, plan.newGameTime, {
-      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`, bible: world.bible, language: world.ctx.language,
+      store, rng: this.rng, seedBase: `${game.id}:${trace.requestId}`, bible: world.storyBible, language: world.ctx.language,
       director: this.directorEnabled
         ? (system, user) => this.callStructured<DirectorProposal>(trace, 'director', system, user, 'director', DirectorProposalSchema, DirectorProposalSchema)
         : null,
@@ -741,7 +742,7 @@ export class Engine {
     // A beat is extra: if it can't be made valid (or the call fails), the player's turn goes ahead without it.
     let beat: SceneBeat;
     try {
-      beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.bible, world.ctx, this.pack.offerKinds.map((k) => `  - ${k.kind}: ${k.summary}. terms: ${k.terms.map((t) => t.key).join(', ')}`).join('\n')), user, 'scene_beat', SceneBeatSchema, SceneBeatParseSchema as unknown as z.ZodType<SceneBeat>,
+      beat = await this.callStructured<SceneBeat>(trace, 'scene_beat', beatSystemPrompt(world.storyBible, world.ctx, this.pack.offerKinds.map((k) => `  - ${k.kind}: ${k.summary}. terms: ${k.terms.map((t) => t.key).join(', ')}`).join('\n')), user, 'scene_beat', SceneBeatSchema, SceneBeatParseSchema as unknown as z.ZodType<SceneBeat>,
         (b) => beatProblems(b, { characters: known, playerId: player.id, conversationOpen }));
     } catch (e) {
       if (!(e instanceof TurnFailure) && !(e instanceof LLMError)) throw e;
@@ -927,7 +928,7 @@ export const SELF_HARM_MESSAGE = [
 ].join('\n');
 
 const label = (channel: string) => (channel === 'phone' ? 'call' : channel === 'message' ? 'chat' : 'conversation');
-const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+const norm = foldName;
 const sameName = (a: string, b: string) => norm(a) === norm(b) || norm(a).split(' ')[0] === norm(b).split(' ')[0];
 
 /** Exact full-name match; a bare first name ("Marco") also matches by first name. */

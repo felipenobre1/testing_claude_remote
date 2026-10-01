@@ -13,7 +13,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promise${n > 1 ? 's' : ''}${overdue ? ` (${overdue} overdue!)` : ''}`,
     gameFooter: (id: string) => `(game ${id} — /quit to leave; everything is saved after each turn)`,
     hintsOn: 'next-move ideas on', hintsOff: 'next-move ideas off', failed: 'Something went wrong while resolving that — nothing was saved. Try again.',
-    gm: 'Game master', gmThinking: 'the game master is thinking',
+    deadline: 'deadline', gm: 'Game master', gmThinking: 'the game master is thinking',
     roll: 'Roll', pressEnter: 'press Enter to roll the d20', you: 'you', vs: 'vs', margin: 'margin', hidden: 'you can\'t tell how it went — you may have been seen',
     outcomes: { success: 'SUCCESS', partial: 'PARTIAL', failure: 'FAILURE' }, critical: 'natural 20!', fumble: 'natural 1…', diceOn: 'dice on', diceOff: 'dice off (results shown directly)',
     terms: {} as Record<string, string>,
@@ -25,7 +25,7 @@ export const UI = {
     promises: (n: number, overdue: number) => `${n} promessa${n > 1 ? 's' : ''}${overdue ? ` (${overdue} atrasada${overdue > 1 ? 's' : ''}!)` : ''}`,
     gameFooter: (id: string) => `(jogo ${id} — /quit para sair; tudo é salvo a cada turno)`,
     hintsOn: 'ideias de próximos passos ligadas', hintsOff: 'ideias de próximos passos desligadas', failed: 'Algo deu errado ao resolver isso — nada foi salvo. Tente de novo.',
-    gm: 'Mestre do jogo', gmThinking: 'o mestre do jogo está pensando',
+    deadline: 'prazo final', gm: 'Mestre do jogo', gmThinking: 'o mestre do jogo está pensando',
     roll: 'Rolagem', pressEnter: 'pressione Enter para rolar o d20', you: 'você', vs: 'contra', margin: 'margem', hidden: 'você não sabe como foi — alguém pode ter visto',
     outcomes: { success: 'SUCESSO', partial: 'PARCIAL', failure: 'FALHA' }, critical: '20 natural!', fumble: '1 natural…', diceOn: 'dados ligados', diceOff: 'dados desligados (resultados direto)',
     terms: {

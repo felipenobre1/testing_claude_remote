@@ -162,6 +162,10 @@ ${bible}
 
 Write this turn as a passage of a novel:
 - Put the reader inside the scene: the place (light, sounds, smells, temperature, objects), their body (breath, pain, fatigue, hunger), what they feel — concrete, specific, never generic. Vary rhythm; no purple prose, no clichés.
+- Arriving somewhere new (PLACE is not where the previous passage was): open by placing the reader there — what the eye meets first, the light and weather, one smell, one sound, who is there and what they are doing.
+- Every passage carries at least one concrete detail that belongs only to this place and moment (a texture, a smell, a sound, a temperature, an object in someone's hands) — never stock atmosphere ("tension hung in the air", "a chill ran down your spine", "time seemed to stop"), never a detail from the previous passage.
+- Show people through what they do: hands, posture, clothes, what they are busy with while they talk — not adjectives alone.
+- Name things as people of this world would (period-true words for food, clothing, tools, money, titles), so the reader learns the world by living in it.
 - CONTINUITY: the PREVIOUS PASSAGE is what the reader has just read. Continue from it like the next paragraph of the same book. Do not describe the place, the light, the smells, the weather or the reader's gear again unless something changed (a new place, time passing, a new sense detail that matters). Never reuse its images or phrases.
 - The reader just wrote their own words and actions: do NOT repeat them back. Show their effect instead (a reaction, a silence, the other person's face); at most echo a few words when it matters.
 - Everything in THE FACTS OF THIS TURN is decided and true. Narrate it faithfully: never change, soften or add outcomes (who wins, who dies, what is found, what is paid), never invent numbers. You may show HOW it happened.

@@ -43,7 +43,7 @@ export OPENAI_MODEL=gpt-6-luna   # optional (default gpt-6-luna)
 npm start -- new              # design a world with the Copilot, approve it, play (resumes an unfinished draft)
 npm start -- new --fresh      # start a new draft even if one is unfinished
 npm start -- new --quick      # skip the conversation: the default Startup world (Felipe, his MVP, €600, Milan)
-npm start -- new --quick --pack adventure   # the Adventure pack's default opening: Kvothe at the University (Kingkiller-inspired, eventful, literary)
+npm start -- new --quick --pack adventure   # the Adventure pack's default opening: "The Iron Pact" — a murder on the Danelaw border, 879
 npm start -- new --quick --pack open   # the Open World pack's example world
 npm start -- continue         # later, in a new process: continue the most recent game
 npm start -- drafts           # list world drafts (drafting / awaiting approval / finalized / abandoned)
@@ -88,6 +88,16 @@ These are generic engine features. Each world sets them at creation (`style.pace
 - **Protection.** Attacking someone guarded means fighting the guards first (`fight.guards`). Only when they are down does the one they protect enter the fight, and trying to kill makes the guards fight to kill.
 - **People attack you.** In a conversation, an NPC can decide to attack (`attack`: intent, how dangerous they are, how). Scene beats can be attacks too: an ambush, someone you wronged, a hired blade. The attacker strikes first and a fight begins with the player on the back foot (`npcAttack`); someone who joins a fight already on is added to it.
 
+## Mysteries: hidden truths, clues and deadlines
+
+A world can decide its secrets at creation, so a mystery can't drift into "whoever you accuse did it":
+
+- **Hidden truths** (`secrets`): who did it, why, who knows what. Each truth lives only in the minds of the characters who know it — they hide it, trade it or let it slip as people do. The storytellers that move the world (director, scene beats) know it and keep everything consistent with it; the narrator, the game master and the player never see it.
+- **Clues**: physical traces at a place, found with `investigate` ("I examine the latch of the back door") — the right skill and a roll; found once; nothing else lies where nothing was placed, and you can't tell an empty room from a missed clue.
+- **Deadlines**: what happens at a fixed time unless the player changes it (the fyrd marches at dawn). When it comes due, the world must answer it.
+
+The Copilot can create these too ("I want a murder mystery — surprise me").
+
 ## Writing your past as you play (recollections)
 
 You don't need to know your character in advance. Say "I remember my mother taught me to pick locks" or "back in the docks I knew a fence called Maren", and it becomes part of your past — within limits, so nobody remembers their way into mastery:
@@ -109,7 +119,7 @@ The story pauses whenever you ask the game master something out of character: `/
 
 ## Game Pack: Adventure
 
-For fantasy and science-fantasy worlds, including a known universe used as reference (Dune-like and so on). The engine stays agnostic: any world can be built with the Copilot. Quick start: `npm start -- new --quick --pack adventure` opens the default world, inspired by *The Kingkiller Chronicle*: you are Kvothe at fifteen, the day before admissions at the University, with thirteen jots, no lute and the Chandrian on your mind. Canon policy is *alternate from the start*: nothing after that morning is written. It is a story of tuition, debts, music, rivals, love and a slow mystery, with violence that is rare and matters. The original desert world of Ashkar (Rhen, a pit fighter) is kept for the tests.
+For fantasy, historical and science-fantasy worlds, including a known universe used as reference (Dune-like and so on). The engine stays agnostic: any world can be built with the Copilot. Quick start: `npm start -- new --quick --pack adventure` opens **"The Iron Pact"**: autumn 879, the Danelaw. A Saxon thegn lies dead in a Danish longhouse with a Norse axe beside him; in three days his brother's fyrd marches to burn the Danes out. You are Aldric Thorkelsson (`--name` to change it), a Dane's son raised among Saxons and the arbiter both peoples call when blood is spilled — trusted by both, and fully by neither. Words are the weapons: questioning, oaths, bargains, lies, confessions. Your own past is written as you play (recollections). The truth of the killing was decided when the world was made and does not change: the suspects know what they know, clues lie where they lie, and the fyrd is on the calendar. The original desert world of Ashkar (Rhen, a pit fighter) is kept for the tests.
 
 - **Fights go exchange by exchange.** `fight` starts one; after that every message you send is one exchange (`combat_move`) until it ends. Your move is read from what you describe: heavy attack, quick attack, guard, feint, grapple, use of the ground (sand in the eyes, a table, a wall), break away, or yield. The opponent's move comes from their fighting style (aggressive, defensive, tricky, brute) and their breath. A counter-table decides which move beats which: a guard stops a heavy blow, a feint opens a guard, a grapple beats a feint. Then comes the rest of the roll: your combat skill, strength, weapon, armour, wounds, breath, the upper hand you have built, and a bonus for genuinely clever tactics, against theirs, plus a d20. Every exchange shows the whole breakdown and a state line (`You ❤ 72/100 · 💨 55 · ▲1 | Kesh Adar: badly hurt, breathing hard`). Several opponents strike while you deal with one. Attackers stop when they have what they wanted (humbled or driven off at half health, hurt at a third); only someone fighting to kill goes on. At the end come rolled XP, fame for a public win, and the world's answer to what you did. While a fight is on, no scene beat interrupts it, and the narrator tells one exchange at a time, stopping mid-fight so you choose the next move.
 - **Sparring** (`fight` intent `spar`): agreed practice bouts of three exchanges leave bruises, not wounds. Nobody dies, there's no fame or consequence, and XP is halved. Wounds depend on what hit you: fists, clubs and training weapons bruise and crack; blades cut.

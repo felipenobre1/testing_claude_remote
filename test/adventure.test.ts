@@ -53,23 +53,74 @@ test('the example world: a fighter with skills, gear, fame, a debt and people wh
   s.store.close();
 });
 
-test('the default opening: Kvothe at the University, the day before admissions (Kingkiller-inspired, alternate from the start)', () => {
+test('the default opening: the Danelaw, 879 — a fixed hidden truth, clues where they lie, and the fyrd on the calendar', async () => {
   const store = new Store(tmpDbPath());
-  const engine = new Engine(store, new ScriptedProvider(), { pack: defaultAdventure, rng: fixedRng(0.5), beats: false, narrator: false, director: false });
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: defaultAdventure, rng: fixedRng(1), beats: false, narrator: false, director: false });
   const { game, player, opening } = engine.newGame();
-  assert.equal(player.name, 'Kvothe');
-  assert.match(opening, /^The University, across the river from Imre — /);
-  assert.match(opening, /Admissions \(The Hollows, the University\)/);
-  assert.match(formatStatusLine(store, game.id), /· j 13\.00 · ❤ 80\/80 · level 1 · ★ unknown ──$/); // strength 1: a scholar's body
-  const sheet = defaultAdventure.commands!.sheet!.run(store, game.id, [], 'pt');
-  assert.match(sheet, /astúcia ●●●●●/);
-  assert.match(sheet, /arcanismo +●○○○○\n +atuação +●●●○○/);
-  assert.deepEqual(store.listCharacters(game.id).map((c) => c.name).sort(), ['Ambrose Jakis', 'Denna', 'Devi', 'Elodin', 'Kilvin', 'Kvothe', 'Simmon']);
-  const seed = store.getWorldSeed<{ world: { sourceWorld: string; canonPolicy: string } }>(game.id)!;
-  assert.deepEqual([seed.world.sourceWorld, seed.world.canonPolicy], ['The Kingkiller Chronicle (Patrick Rothfuss)', 'alternate_from_start']);
+  assert.equal(player.name, 'Aldric Thorkelsson');
+  assert.match(opening, /^Durobrivae, the old Roman walls on the Ermine Street, by the river Nene — /);
+  assert.match(opening, /⚠ .*— Eadric's fyrd .* marches on Ketilsby/);
+  assert.match(formatStatusLine(store, game.id), /· d 40\.00 · ❤ 90\/90 · level 1 · ★ /);
+  const sheet = defaultAdventure.commands!.sheet!.run(store, game.id, [], 'en');
+  assert.match(sheet, /RECOLLECTIONS  3 left/); // his past is written as he plays
+  const name = (id: string) => store.getCharacter(id)!.name;
+  const secretsOf = (n: string) => store.listKnowledgeOf(store.listCharacters(game.id).find((c) => c.name === n)!.id).filter((k) => k.topic.startsWith('secret: ')).length;
+  // The truth lives only in the minds of those who know it.
+  assert.deepEqual(['Eadric', 'Osric', 'Ketil Grimsson', 'Hrafn Ketilsson', 'Ælfgifu', 'Bjarni'].map(secretsOf), [2, 1, 1, 1, 2, 1]);
+  assert.equal(store.listKnowledgeOf(player.id).filter((k) => k.topic.startsWith('secret: ')).length, 0);
+  assert.ok(store.listScheduled(game.id, 'pending').some((x) => x.kind === 'consequence' && x.dueGameTime === '0879-10-17T06:00' && /DEADLINE/.test(String(x.payload.summary))));
+  void name;
+
+  // A clue is found where it lies, by looking closely — once.
+  const look = (what: string) => { llm.enqueue('interpret', interp({ intents: ['general_action'], minutesElapsed: 20, narration: '', actions: [{ action: 'investigate', what, skill: 'perception', minutes: 20 }] })); return engine.takeTurn({ gameId: game.id, input: `I examine ${what}` }); };
+  let r = await look('the axe in the strongroom');
+  assert.match(r.text, /🔎 the axe in the strongroom: you find something — The axe is new: no nick on the edge/);
+  r = await look('the axe in the strongroom');
+  assert.match(r.text, /🔎 the axe in the strongroom: nothing you can see\./); // already found; nothing else lies here
+  r = await look('Wulfstan\'s body'); // the body is in the church at Ealdwic, not at the fort
+  assert.match(r.text, /nothing you can see/);
+  assert.ok(store.listKnowledgeOf(player.id).some((k) => k.topic.startsWith('clue: ') && /unblooded axe/.test(k.belief)));
+  assert.match(llm.callsFor('interpret')[0]!.system, /investigate: the player examines something closely HERE/);
+
+  // Ælfgifu answers to "Aelfgifu".
+  llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Aelfgifu', relationHint: null }, channel: 'in_person', spokenText: 'Lady.' }))
+    .enqueue('npc_turn', npc({ dialogue: 'Arbiter.' }));
+  const talk = await engine.takeTurn({ gameId: game.id, input: 'I speak to Aelfgifu' });
+  assert.equal(talk.status, 'committed', talk.error ?? '');
+  assert.equal(llm.callsFor('generate_character').length, 0);
+  // Ælfgifu's briefing carries what she knows; nothing of what she doesn't.
+  assert.match(lastPrompt(llm, 'npc_turn'), /secret: Hrafn spent the night of the killing with Ælfgifu/);
+  assert.doesNotMatch(lastPrompt(llm, 'npc_turn'), /Eadric had his brother killed/);
   store.close();
 });
 
+test('the hidden truth reaches only the storytellers who move the world — never the narrator or the game master', async () => {
+  const store = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: defaultAdventure, rng: fixedRng(0.5), beats: true, narrator: true, director: false });
+  const { game } = engine.newGame();
+  const quiet = () => interp({ intents: ['general_action'], minutesElapsed: 10, narration: 'You wait.' });
+  llm.enqueue('interpret', quiet(), quiet())
+    .enqueue('narrate', { prose: 'Rain drips from the arch; the peat fire hisses.', suggestions: [], lines: [] })
+    .enqueue('scene_beat', (req: { system: string }) => {
+      assert.match(req.system, /THE HIDDEN TRUTH \(the storyteller's secret — never reveal it/);
+      assert.match(req.system, /Eadric had his brother killed/);
+      return { kind: 'arrival', title: 'A rider', perceived: 'A rider comes through the gate.', involves: [], newPerson: null, opensConversation: null, choice: 'Meet him or not.', offer: null, attack: null };
+    })
+    .enqueue('narrate', { prose: 'Hooves on wet stone: a rider comes through the gate.', suggestions: [], lines: [] });
+  await engine.takeTurn({ gameId: game.id, input: 'I wait' });
+  const r = await engine.takeTurn({ gameId: game.id, input: 'I keep waiting' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  for (const call of llm.callsFor('narrate')) assert.doesNotMatch(call.system, /Eadric had his brother killed|HIDDEN TRUTH/);
+  assert.match(llm.callsFor('narrate')[0]!.system, /Arriving somewhere new .* open by placing the reader there/);
+  llm.enqueue('game_master', (req: { system: string; user: string }) => {
+    assert.doesNotMatch(`${req.system}\n${req.user}`, /Eadric had his brother killed/);
+    return { answer: 'You don\'t know that yet.' };
+  });
+  await engine.takeTurn({ gameId: game.id, input: '? who killed Wulfstan?' });
+  store.close();
+});
 test('fights go exchange by exchange: moves, a counter-table, momentum, a d20; a killed person is dead for good', async () => {
   // Roll 1: d20 20 every time, Kesh always grapples. A heavy attack beats a grapple (+1); each clean hit builds the upper hand.
   const s = start({ roll: 1 });

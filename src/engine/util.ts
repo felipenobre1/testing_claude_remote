@@ -43,6 +43,10 @@ const STOPWORDS = new Set(
     'che per con non una uno gli del della sono come anche mi ti ci si').split(' '),
 );
 
+/** Names compare without case, accents or ligatures: "Ælfgifu" = "aelfgifu", "Þórr" = "thorr". */
+export const foldName = (s: string) => s.trim().toLowerCase().replace(/æ/g, 'ae').replace(/þ/g, 'th').replace(/ð/g, 'd').replace(/ø/g, 'o')
+  .normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, ' ');
+
 export function keywords(text: string): Set<string> {
   const out = new Set<string>();
   for (const w of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {

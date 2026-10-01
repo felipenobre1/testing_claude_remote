@@ -6,7 +6,7 @@ import type {
 import type { GamePack, PackTurnState } from '../packs/types.ts';
 import { MAX_ATTEMPTS, reconsiderAfterMinutes, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
-import { addMinutes, formatGameTime, newId } from './util.ts';
+import { addMinutes, foldName, formatGameTime, newId } from './util.ts';
 
 // ============================================================================
 // World planner (generic): resources, offers, promises, decisions, threads and schedule
@@ -135,10 +135,10 @@ export class WorldPlanner {
   offerKind(kind: string) { return this.ctx.pack.offerKinds.find((k) => k.kind === kind); }
   describeOffer(o: Offer): string { return this.offerKind(o.kind)?.describe(this, o) ?? `${o.kind}: ${o.description}`; }
   findCharacter(name: string): Character | undefined {
-    const n = name.trim().toLowerCase();
+    const n = foldName(name);
     const aliased = Object.entries(this.ctx.aliases ?? {}).find(([label]) => bareLabel(label) === bareLabel(name))?.[1];
-    return this.ctx.characters.find((c) => c.name.toLowerCase() === n) ?? (aliased ? this.ctx.characters.find((c) => c.id === aliased) : undefined)
-      ?? this.ctx.characters.find((c) => c.name.toLowerCase().split(' ')[0] === n.split(' ')[0]);
+    return this.ctx.characters.find((c) => foldName(c.name) === n) ?? (aliased ? this.ctx.characters.find((c) => c.id === aliased) : undefined)
+      ?? this.ctx.characters.find((c) => foldName(c.name).split(' ')[0] === n.split(' ')[0]);
   }
   name(id: string) { return this.ctx.characters.find((c) => c.id === id)?.name ?? this.ctx.store.getCharacter(id)?.name ?? id; }
   inConversation(id: string) { return Boolean(this.ctx.interaction?.participantIds.includes(id)); }

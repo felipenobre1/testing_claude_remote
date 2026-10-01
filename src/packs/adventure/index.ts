@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import type { Character } from '../../domain/types.ts';
 import { STARTING_RECOLLECTIONS, type WorldPlanner } from '../../engine/planner.ts';
-import { newId } from '../../engine/util.ts';
+import { keywords, newId, overlap } from '../../engine/util.ts';
+import type { WorldSeed } from '../../domain/world.ts';
 import type { Store } from '../../db/store.ts';
 import { dealOfferKind } from '../deal.ts';
 import type { GamePack, PackAction } from '../types.ts';
-import { KINGKILLER_WORLD } from './world.ts';
+import { DANELAW_WORLD } from './world.ts';
 import {
   ADVENTURE_MIGRATIONS, AdventureState, advRepo, ATTRIBUTES, DEFAULT_ATTRIBUTES, fameLabel, fameLabelIn, MAX_LEVEL, MOVES, practiceFor, SKILL_ATTR, SKILLS, xpForNext,
   type Combatant, type Encounter, type FoeIntent, type Injury, type Move, type Item, type Profile, type Skill,
@@ -413,6 +414,41 @@ const actions: PackAction[] = [
     },
   },
   {
+    name: 'investigate',
+    schema: z.strictObject({ action: z.literal('investigate'), what: z.string().min(3).max(200), skill: z.enum(SKILLS), minutes: z.number() }),
+    doc: 'investigate: the player examines something closely HERE, looking for what others missed — a body, a wound, a room, tracks in the mud, a door, a weapon, a ledger. what = what they examine (with where it is); skill: perception (looking), survival (tracks), lore (wounds, law, customs, writing), arcana (magic), or another that fits. The game decides what is found; never invent findings.',
+    handle: (api, a) => {
+      // Clues were decided at creation: what can be found here is fixed, and finding it takes the right eye and a roll.
+      const me = api.ctx.player.id;
+      const p = profile(api, me);
+      const seed = api.ctx.store.getWorldSeed<WorldSeed>(api.ctx.gameId);
+      const known = new Set(api.ctx.store.listKnowledgeOf(me).map((k) => k.topic));
+      // A clue is found where it is: it must match both what the player examines and where they are.
+      const what = keywords(String(a.what));
+      const where = keywords(api.ctx.location);
+      const score = (place: string) => overlap(what, place) + overlap(where, place);
+      const clue = (seed?.clues ?? []).map((c, i) => ({ c, topic: `clue: ${c.place.slice(0, 80)} #${i + 1}` }))
+        .filter((x) => !known.has(x.topic) && overlap(what, x.c.place) > 0 && overlap(where, x.c.place) > 0)
+        .sort((x, y) => score(y.c.place) - score(x.c.place) || x.c.difficulty - y.c.difficulty)[0];
+      // With nothing to find, the search is rolled just the same: the player can't tell an empty room from a missed clue.
+      const skill = clue ? (SKILLS.includes(clue.c.skill as Skill) ? clue.c.skill : String(a.skill)) : String(a.skill);
+      const { outcome, detail } = check(api, p, skill, clue?.c.difficulty ?? 2, `investigate:${a.what}`);
+      const xp = gainXp(api, p, (clue?.c.difficulty ?? 1) * { success: 6, partial: 3, failure: 1 }[outcome], `investigate:${a.what}`);
+      st(api).touch(p, api.ctx.now);
+      if (clue && outcome === 'success') {
+        api.ops.push({ op: 'upsert_knowledge', knowledge: { id: newId('know'), gameId: api.ctx.gameId, characterId: me, topic: clue.topic, belief: clue.c.finding, confidence: 1,
+          aboutCharacterId: null, factId: null, source: 'investigation', sourceEventId: null, gameTime: api.ctx.gameTime, createdAt: api.ctx.now, updatedAt: api.ctx.now } });
+        api.event('discovery', `${api.ctx.player.name} examined ${a.what} and found: ${clue.c.finding}`, [me, ...(api.ctx.interaction?.participantIds ?? [])], [{ characterId: me, role: 'actor' }], 3);
+        api.results.push(`🔎 ${a.what}: you find something — ${clue.c.finding}${xp}${detail}`);
+      } else if (clue && outcome === 'partial') {
+        api.results.push(`🔎 ${a.what}: something here is not right, but you can't put your finger on it yet.${xp}${detail}`);
+      } else {
+        api.results.push(`🔎 ${a.what}: nothing you can see.${xp}${detail}`);
+      }
+      return null;
+    },
+  },
+  {
     name: 'attempt',
     schema: z.strictObject({
       action: z.literal('attempt'), feat: z.string().min(3).max(200), skill: z.enum(SKILLS), difficulty: z.number(),
@@ -771,7 +807,7 @@ export const adventurePack: GamePack = {
           quality: clamp(Math.round(m.quality ?? 1), 0, 3), quantity: Math.max(1, Math.round(m.quantity ?? 1)), createdAt: now });
       }
     },
-    template: KINGKILLER_WORLD, // quick start: `npm start -- new --quick --pack adventure`
+    template: DANELAW_WORLD, // quick start: `npm start -- new --quick --pack adventure`
   },
   npcAttack(api, attackerId, attack) {
     const named = api.ctx.characters.find((c) => c.id === attackerId);

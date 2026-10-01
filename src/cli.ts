@@ -184,6 +184,8 @@ async function narratedOpening(engine: Engine, gameId: string, plain: string): P
     const x = i.payload as { title: string; location?: string | null };
     return `  • ${longDate(i.dueGameTime, lang)} — ${x.title}${x.location ? ` (${x.location})` : ''}`;
   });
+  const seed = store.getWorldSeed<WorldSeed>(gameId);
+  soon.push(...(seed?.deadlines ?? []).map((d) => `  ⚠ ${longDate(d.when, lang)} — ${UI[lang].deadline}`));
   return `${place} — ${longDate(game.gameTime, lang)}\n\n${prose}${soon.length ? `\n\n${UI[lang].comingUp}\n${soon.join('\n')}` : ''}`;
 }
 
