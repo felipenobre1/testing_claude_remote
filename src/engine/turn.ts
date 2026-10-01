@@ -245,7 +245,10 @@ export class Engine {
         target = matches[0];
         trace.resolution = { kind: 'existing', name: targetName, characterId: target!.id };
       } else {
-        pending = await this.generateCharacter(trace, game, player, everyone, targetName, interp.target!.relationHint);
+        // Someone the player remembered from their past (or found a lead to) is created as remembered — complications included.
+        const known = store.getKnowledge(player.id, `contact: ${targetName}`);
+        const hint = [interp.target!.relationHint, known ? `What ${player.name} knows: ${known.belief}` : null].filter(Boolean).join(' — ') || null;
+        pending = await this.generateCharacter(trace, game, player, everyone, targetName, hint);
         target = pending.character;
         trace.resolution = { kind: 'generated', name: targetName, characterId: target.id };
       }

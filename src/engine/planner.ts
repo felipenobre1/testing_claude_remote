@@ -77,10 +77,14 @@ const bareLabel = (s: string) => s.trim().toLowerCase().replace(/^(the|a|an|o|a|
 /** A paid price may differ from the known one (sales, a fancier place) but not wildly. */
 export const PRICE_TOLERANCE = 3;
 
+/** How many costly recollections (training, an acquaintance) a character starts with; packs add more as they are earned. */
+export const STARTING_RECOLLECTIONS = 3;
+
 export class WorldPlanner {
   readonly ops: PlannedOp[] = [];
   readonly events: GameEvent[] = [];
   readonly results: string[] = []; // deterministic lines shown to the player
+  private recalledThisTurn = false;
   readonly rejected: { action: unknown; reason: string }[] = [];
   /** Outcomes this turn that people present witnessed (fights, feats) — the NPC's portrayal must be consistent with them. */
   readonly witnessed: string[] = [];
@@ -372,6 +376,44 @@ export class WorldPlanner {
           this.event('discovery', `${player.name} looked for a way to reach ${act.target} (${act.approach}) and found nothing useful.`, [me], [{ characterId: me, role: 'actor' }], 1);
           this.results.push(`🔎 Nothing useful yet on ${act.target} via ${act.approach}. Another approach (or more time) might work.`);
         }
+        return null;
+      }
+      case 'recall': {
+        // The player writes the character's past as they play — within limits: it must fit what is already true, it puts nothing
+        // in their pocket, and what has a mechanical effect (training, an acquaintance) spends a limited budget.
+        const act = a as Extract<PlayerAction, { action: 'recall' }>;
+        if (this.recalledThisTurn) return this.reject(a, 'One recollection at a time.'), null;
+        if (act.conflict) return this.reject(a, `That can't be part of ${player.name}'s past: ${act.conflict}`), null;
+        const rc = this.ctx.pack.recollection;
+        const training = act.kind === 'training' && Boolean(rc && act.skill && rc.skills.includes(act.skill));
+        const costly = training || (act.kind === 'acquaintance' && Boolean(act.acquaintance));
+        const budget = STARTING_RECOLLECTIONS + (rc?.earned(this) ?? 0);
+        const left = budget - this.ctx.store.listKnowledgeOf(me).filter((k) => k.source === 'recollection+').length;
+        if (costly && left <= 0) return this.reject(a, `No recollections left (${budget} used). Level up to earn more — or live it now.`), null;
+        let effect = '';
+        let topic = `my past: ${act.memory}`;
+        let belief = act.memory;
+        if (training) {
+          const r = rc!.train(this, act.skill!);
+          if (!r.ok) return this.reject(a, r.reason), null;
+          effect = r.line;
+        } else if (act.kind === 'acquaintance' && act.acquaintance) {
+          // The past cuts both ways.
+          const x = act.acquaintance;
+          const roll = this.random(`recall:${x.name}`);
+          const terms = roll < 0.35 ? `they hold something against ${player.name} from back then` : roll < 0.7 ? `${player.name} owes them something — or they will want something` : 'they parted on good terms';
+          topic = `contact: ${x.name}`;
+          belief = `${x.role} — ${x.where}. Knew ${player.name} in the past (${act.memory}); ${terms}. Has not seen ${player.name} since.`;
+          effect = `${x.name}, ${x.role} (${x.where}) — ${terms}`;
+        }
+        this.ops.push({ op: 'upsert_knowledge', knowledge: {
+          id: newId('know'), gameId: this.ctx.gameId, characterId: me, topic: topic.slice(0, 120), belief: belief.slice(0, 600),
+          confidence: act.kind === 'knowledge' ? 0.6 : 1, aboutCharacterId: null, factId: null, source: costly ? 'recollection+' : 'recollection',
+          sourceEventId: null, gameTime: this.ctx.gameTime, createdAt: this.ctx.now, updatedAt: this.ctx.now,
+        } });
+        this.recalledThisTurn = true;
+        this.event('recollection', `${player.name} remembered: ${act.memory}`, [me], [{ characterId: me, role: 'actor' }], 1);
+        this.results.push(`🕯 Recollection: ${act.memory}${effect ? ` — ${effect}` : ''}${costly ? ` · ${left - 1} recollection${left - 1 === 1 ? '' : 's'} left` : ''}${act.kind === 'knowledge' ? ' (what you remember — it may be wrong)' : ''}`);
         return null;
       }
       case 'research': {

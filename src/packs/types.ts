@@ -66,6 +66,17 @@ export interface GamePack {
     /** Creates the pack's starting state from the approved seed, inside the creation transaction. */
     seed?(ctx: PackSeedContext): void;
   };
+  /**
+   * Recollections: how a past the player writes during play may touch this pack's mechanics.
+   * Without it, remembered training is colour only.
+   */
+  recollection?: {
+    skills: readonly string[];
+    /** A remembered teacher: raise the skill a little — never to mastery. Returns the effect line, or why a memory can't do it. */
+    train(api: WorldPlanner, skill: string): { ok: true; line: string } | { ok: false; reason: string };
+    /** Recollections earned in play on top of the starting ones (e.g. one per level). */
+    earned(api: WorldPlanner): number;
+  };
   /** Someone attacks the player (from a conversation or a scene beat). The pack resolves it; without this hook, attacks are words only. */
   npcAttack?(api: WorldPlanner, attackerId: string, attack: NpcAttack): void;
   /** True while the pack holds the scene (e.g. a fight in progress): no scene beat may interrupt it. */

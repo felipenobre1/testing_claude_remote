@@ -88,6 +88,17 @@ These are generic engine features. Each world sets them at creation (`style.pace
 - **Protection.** Attacking someone guarded means fighting the guards first (`fight.guards`). Only when they are down does the one they protect enter the fight, and trying to kill makes the guards fight to kill.
 - **People attack you.** In a conversation, an NPC can decide to attack (`attack`: intent, how dangerous they are, how). Scene beats can be attacks too: an ambush, someone you wronged, a hired blade. The attacker strikes first and a fight begins with the player on the back foot (`npcAttack`); someone who joins a fight already on is added to it.
 
+## Writing your past as you play (recollections)
+
+You don't need to know your character in advance. Say "I remember my mother taught me to pick locks" or "back in the docks I knew a fence called Maren", and it becomes part of your past — within limits, so nobody remembers their way into mastery:
+
+- **Details** (who you were, where you grew up) are free, as long as they fit what is already true.
+- **Knowledge** you remember is a belief, not world truth: it may be wrong, and it never reveals the world's secrets.
+- **A training** costs one recollection and gives +1 to a skill, never above 2. Beyond that, skills grow only by training and use.
+- **An old acquaintance** costs one recollection: an ordinary person (never a lord or a master) who comes with a rolled complication — a grudge, a debt, or good terms. When you go to meet them, they are created as you remembered them.
+- **Never** items, money, titles, powers, or anything that conveniently rewrites the present. One recollection per turn.
+- You start with 3 recollections and earn one per level. `/sheet` shows how many are left and the past you've written so far.
+
 ## Asking the game master
 
 The story pauses whenever you ask the game master something out of character: `/gm <question>`, `? <question>`, or just "I ask the narrator: …" in a normal message (the interpreter recognises it). The game master answers from what your character could know (the scene, your sheet, your notes, the people you know, the last moments of play) and from the pack's rules. It never reveals secrets or decides outcomes, nothing in the world changes and no time passes. The question and answer are kept in the turn log and the playtest export.

@@ -28,6 +28,12 @@ export const CORE_ACTIONS = [
     ifPerson: z.strictObject({ name: z.string().min(2).max(80), role: z.string().min(2).max(120), channel: z.string().min(2).max(120) }).nullable(),
     ifChannel: z.string().max(160).nullable(),
   }),
+  z.strictObject({
+    action: z.literal('recall'), memory: z.string().min(3).max(400), kind: z.enum(['detail', 'knowledge', 'training', 'acquaintance']),
+    skill: z.string().max(40).nullable(), // training: which skill it is
+    acquaintance: z.strictObject({ name: z.string().min(2).max(80), role: z.string().min(2).max(120), where: z.string().min(2).max(160) }).nullable(),
+    conflict: z.string().max(300).nullable(), // what it contradicts, or why it can't be — then it doesn't become true
+  }),
   z.strictObject({ action: z.literal('research'), topic: z.string().min(2).max(120), findings: z.array(z.string().min(3).max(300)).min(1).max(5) }),
 ] as const;
 type CoreAction = z.infer<(typeof CORE_ACTIONS)[number]>;

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Character } from '../../domain/types.ts';
-import type { WorldPlanner } from '../../engine/planner.ts';
+import { STARTING_RECOLLECTIONS, type WorldPlanner } from '../../engine/planner.ts';
 import { newId } from '../../engine/util.ts';
 import type { Store } from '../../db/store.ts';
 import { dealOfferKind } from '../deal.ts';
@@ -647,6 +647,16 @@ const SHEET_PT: Record<string, string> = {
   arcana: 'arcanismo', performance: 'atuação',
 };
 
+/** The past the player has written so far, and how many costly recollections are left. */
+function pastLines(store: Store, playerId: string, level: number, pt: boolean): string[] {
+  const k = store.listKnowledgeOf(playerId).filter((x) => x.source === 'recollection' || x.source === 'recollection+');
+  const left = STARTING_RECOLLECTIONS + level - 1 - k.filter((x) => x.source === 'recollection+').length;
+  return [
+    `${pt ? 'LEMBRANÇAS' : 'RECOLLECTIONS'}  ${left} ${pt ? 'restante(s) — treino ou alguém do passado custa 1; detalhes são livres' : 'left — a training or someone from the past costs 1; details are free'}`,
+    ...k.slice(-8).map((x) => `  🕯 ${x.topic.startsWith('contact: ') ? `${x.topic.slice(9)} — ${x.belief}` : x.belief}`),
+  ];
+}
+
 /** The character sheet (a read-only view of canonical state). */
 export function characterSheet(store: Store, gameId: string, lang: 'en' | 'pt' = 'en'): string {
   const game = store.getGame(gameId)!;
@@ -675,6 +685,7 @@ export function characterSheet(store: Store, gameId: string, lang: 'en' | 'pt' =
     `${pt ? 'DINHEIRO' : 'MONEY'}  ${sym}${(cash / 100).toFixed(2)}`,
     `${pt ? 'REPUTAÇÃO' : 'REPUTATION'}  ${fameLabelIn(p.fame, lang)} (${p.fame})${p.deeds.length ? ` — ${p.deeds.join('; ')}` : ''}`,
     ...(seed?.player.ambition ? [`${pt ? 'AMBIÇÃO' : 'AMBITION'}  ${seed.player.ambition}`] : []),
+    ...pastLines(store, me.id, p.level, pt),
   ];
   return lines.join('\n');
 }
@@ -773,6 +784,19 @@ export const adventurePack: GamePack = {
     exchange(api, e, { move: 'defend', targetName: null, how: 'caught by surprise', cleverness: -1 });
   },
   holdsScene: (api) => Boolean(activeEncounter(api)),
+  recollection: {
+    skills: SKILLS,
+    // A memory can teach the basics (up to 2), never mastery: beyond that a skill grows only by training and use.
+    train(api, skill) {
+      const p = profile(api, api.ctx.player.id);
+      const level = skillLevel(p, skill);
+      if (level >= 2) return { ok: false, reason: `a memory can teach the basics, not more — ${skill} is already ${level}. It grows by training and use.` };
+      p.skills[skill] = { level: level + 1, practice: 0 };
+      st(api).touch(p, api.ctx.now);
+      return { ok: true, line: `${skill} ${level} → ${level + 1}` };
+    },
+    earned: (api) => profile(api, api.ctx.player.id).level - 1,
+  },
   commands: {
     sheet: { help: 'your character sheet', run: (store, gameId, _args, lang) => characterSheet(store, gameId, lang) },
     spend: { help: 'spend a point: /spend <skill> (1 point) or /spend <attribute> (3 points)', run: (store, gameId, args) => spendPoint(store, gameId, args[0] ?? '') },
@@ -820,6 +844,7 @@ export const adventurePack: GamePack = {
       '- Experience is rolled from what was done (fights, feats, lies, persuasion, theft). Each level (100 × level XP) gives a point: /spend <skill> costs 1, /spend <attribute> costs 3. Training also improves a skill through practice.',
       '- Fame grows with deeds done in front of others; people hear what is said about the character and see their wounds.',
       '- Money is real: prices, deals and promises are kept in a ledger; what someone owes is recorded.',
+      '- Recollections: the player writes the character\'s past while playing ("I remember…"). Details are free; a remembered training (+1 to a skill, never above 2) or an old acquaintance (an ordinary person who comes with a complication: a grudge, a debt, or good terms) costs one of the recollections — 3 at the start, +1 per level (/sheet shows how many are left). The past must fit what is already true, and it never gives items, money, titles, powers or the world\'s secrets.',
     ].join('\n'),
     director: 'A dangerous world of factions, feuds, debts, rivals, beasts and opportunities. Developments come from people\'s ambitions and grudges, '
       + 'from what the player did (fights are remembered, fame attracts challengers and patrons), and from the player\'s ambition: put chances and prices on the road to it.',

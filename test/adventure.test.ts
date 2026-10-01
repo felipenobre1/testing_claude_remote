@@ -781,3 +781,40 @@ test('the game master answers out of character: from what the player knows and t
   assert.match(llm.callsFor('interpret').at(-1)!.system, /gameMasterQuestion: when the player steps OUT of the story/);
   store.close();
 });
+
+test('recollections: the player writes the past as they play — details are free, training and old acquaintances cost, nothing makes a master', async () => {
+  const s = start({ roll: 0.5 });
+  const recall = (r: Record<string, unknown>) => ({ action: 'recall', memory: 'x', kind: 'detail', skill: null, acquaintance: null, conflict: null, ...r });
+  const play = (actions: unknown[]) => s.turn('I remember', { intents: ['private_thought'], minutesElapsed: 0, narration: '', actions: actions as never });
+
+  let r = await play([recall({ memory: 'My mother sang to the water-carriers at dawn' })]);
+  assert.match(r.text, /🕯 Recollection: My mother sang to the water-carriers at dawn$/m); // a detail is free
+  r = await play([recall({ memory: 'An old thief taught me to move without a sound', kind: 'training', skill: 'stealth' })]);
+  assert.match(r.text, /🕯 Recollection: An old thief taught me to move without a sound — stealth 1 → 2 · 2 recollections left/);
+  r = await play([recall({ memory: 'He taught me even more', kind: 'training', skill: 'stealth' })]);
+  assert.match(r.text, /✗ a memory can teach the basics, not more — stealth is already 2\. It grows by training and use\./); // never mastery
+  r = await play([recall({ memory: 'I ran errands for a fence in the Cisterns', kind: 'acquaintance', acquaintance: { name: 'Maren Dask', role: 'a fence', where: 'a back room in the Cisterns quarter' } })]);
+  assert.match(r.text, /🕯 Recollection: .* — Maren Dask, a fence \(a back room in the Cisterns quarter\) — Rhen owes them something — or they will want something · 1 recollection left/);
+  r = await play([recall({ memory: 'A scribe taught me letters', kind: 'training', skill: 'lore' }), recall({ memory: 'and sums', kind: 'training', skill: 'lore' })]);
+  assert.match(r.text, /lore 0 → 1 · 0 recollections left/);
+  assert.match(r.text, /✗ One recollection at a time\./);
+  r = await play([recall({ memory: 'A hunter taught me tracking', kind: 'training', skill: 'survival' })]);
+  assert.match(r.text, /✗ No recollections left \(3 used\)\. Level up to earn more — or live it now\./);
+  r = await play([recall({ memory: 'My father left me a sword of House Varr steel', conflict: 'memory puts nothing in his pocket' })]);
+  assert.match(r.text, /✗ That can't be part of Rhen's past: memory puts nothing in his pocket/);
+  assert.deepEqual([s.me().skills.stealth!.level, s.me().skills.lore!.level, s.me().skills.survival!.level], [2, 1, 1]);
+  assert.match(adventurePack.commands!.sheet!.run(s.store, s.game.id, [], 'en'), /RECOLLECTIONS  0 left[\s\S]*🕯 My mother sang[\s\S]*🕯 Maren Dask — a fence — a back room/);
+  assert.match(s.llm.callsFor('interpret')[0]!.system, /recall: Rhen's player invents a piece of Rhen's PAST/);
+
+  // Meeting her: she is who he remembered, complication included.
+  s.llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'Maren Dask', relationHint: null }, channel: 'in_person', spokenText: 'Maren.' }))
+    .enqueue('generate_character', (req: { user: string }) => {
+      assert.match(req.user, /What Rhen knows: a fence — a back room in the Cisterns quarter\. Knew Rhen in the past .* Rhen owes them something/);
+      return { name: 'Maren Dask', age: 44, gender: 'female', role: 'fence', occupation: 'fence', background: 'Buys what the lower city steals.', personality: 'Patient, greedy, remembers every favour.',
+        traits: ['patient', 'greedy'], values: ['profit'], goals: ['Collect what she is owed'], fears: ['The watch'], location: 'Ashkar', relationshipToPlayer: 'The boy who ran her errands — and still owes her.' };
+    })
+    .enqueue('npc_turn', npc({ dialogue: 'Well. Look who remembers me.' }));
+  const meet = await s.engine.takeTurn({ gameId: s.game.id, input: 'I find Maren' });
+  assert.equal(meet.status, 'committed', meet.error ?? '');
+  s.store.close();
+});
