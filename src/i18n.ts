@@ -2,7 +2,9 @@
 // everything the models write is already in the player's language.
 
 export type UiLang = 'en' | 'pt';
-export const uiLang = (language?: string | null): UiLang => (/portugu/i.test(language ?? '') ? 'pt' : 'en');
+export const uiLang = (language?: string | null): UiLang => (/portugu|^pt(-br)?$|brasil|brazil/i.test((language ?? '').trim()) ? 'pt' : 'en');
+/** Short language codes on the command line ("pt", "pt-BR") → the full name the models are given. */
+export const languageName = (language: string) => (/^pt(-br)?$/i.test(language.trim()) ? 'Brazilian Portuguese' : /^en(-\w+)?$/i.test(language.trim()) ? 'English' : language.trim());
 
 export const UI = {
   en: {

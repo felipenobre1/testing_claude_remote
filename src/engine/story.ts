@@ -169,7 +169,9 @@ Write this turn as a passage of a novel:
 - Quote every line of dialogue listed under WORDS SPOKEN exactly as written (you may add who says it, how, gestures around it). Do not invent other dialogue for anyone.
 - Never decide what ${playerName} does, says or feels about a choice next.
 - Never move the reader or let time pass beyond THE FACTS: the passage ends where WHERE THE READER IS AT THE END says, at that time. Do not narrate a departure, a journey or an arrival the facts don't contain. If the reader only said they will go somewhere, they have not gone yet.
+- Write the final text only: never correct yourself on the page (no "a fiddle — no, a lute").
 - Characters keep their gender (see PEOPLE HERE); refer to each person the same way every time.
+- Someone MET FOR THE FIRST TIME is a stranger to the reader: before their words, show how the reader finds or notices them and how the reader approaches (what they did or said to start it), and what the person looks like and how they come across. Never write as if a conversation were already under way. The reader learns their name only when it is given (they introduce themselves, someone names them); until then describe them ("the older student").
 - The reader's body is exactly THE READER'S CONDITION: never invent injuries, objects in wounds, illness or lost belongings the facts don't state.
 - End on the moment that asks for ${playerName}'s decision — the tension, the open question, the person waiting for an answer. Do not list options.
 - Length follows the moment: an exchange of words = one short paragraph around the dialogue; an action with consequences = 1–3 paragraphs; a new place or a big event = up to 5.
@@ -196,6 +198,7 @@ export interface NarratorInput {
   choice: string | null;
   endLocation?: string; // where the reader is when the passage ends (canonical)
   people?: string[]; // "Name (role, gender)" for everyone in the scene
+  newPeople?: string[]; // met for the first time this turn: "Name (role, gender) — what they look like and how they come across"
   resultLines?: string[]; // the game's result lines, to be rendered in the player's language
   previousIdeas?: string[];
   previousPassage?: string; // what the reader read last turn (for continuity; never repeated)
@@ -218,6 +221,7 @@ export function narratorUserPrompt(n: NarratorInput): string {
     ...(n.conversationEnded ? ['The conversation ends here.'] : []),
     ...(n.choice ? [`THE DECISION NOW IN FRONT OF THE PLAYER: ${n.choice}`] : []),
     ...(n.people?.length ? [`PEOPLE HERE: ${n.people.join('; ')}`] : []),
+    ...(n.newPeople?.length ? ['MET FOR THE FIRST TIME THIS TURN (the reader has never seen them before):', ...n.newPeople.map((p) => `- ${p}`)] : []),
     ...(n.endLocation ? [`WHERE THE READER IS AT THE END: ${n.endLocation}`] : []),
     ...(n.previousIdeas?.length ? [`PREVIOUS IDEAS (do not repeat): ${n.previousIdeas.join(' · ')}`] : []),
     ...(n.resultLines?.length ? ['THE RESULT LINES (the game shows these under your passage):', ...n.resultLines.map((l, i) => `${i + 1}. ${l}`)] : []),

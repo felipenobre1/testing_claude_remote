@@ -67,7 +67,12 @@ export interface PlanContext {
   /** Seeded randomness for mechanics (same request ⇒ same result). Defaults to seeds from the turn id. */
   rng?: RngFactory;
   seedBase?: string;
+  /** Labels the player used for someone this turn ("an older student") → who that turned out to be. */
+  aliases?: Record<string, string>;
 }
+
+/** "the older student", "um estudante mais velho" → "older student" / "estudante mais velho": labels compare without articles. */
+const bareLabel = (s: string) => s.trim().toLowerCase().replace(/^(the|a|an|o|a|os|as|um|uma|uns|umas)\s+/, '');
 
 /** A paid price may differ from the known one (sales, a fancier place) but not wildly. */
 export const PRICE_TOLERANCE = 3;
@@ -125,7 +130,9 @@ export class WorldPlanner {
   describeOffer(o: Offer): string { return this.offerKind(o.kind)?.describe(this, o) ?? `${o.kind}: ${o.description}`; }
   findCharacter(name: string): Character | undefined {
     const n = name.trim().toLowerCase();
-    return this.ctx.characters.find((c) => c.name.toLowerCase() === n) ?? this.ctx.characters.find((c) => c.name.toLowerCase().split(' ')[0] === n.split(' ')[0]);
+    const aliased = Object.entries(this.ctx.aliases ?? {}).find(([label]) => bareLabel(label) === bareLabel(name))?.[1];
+    return this.ctx.characters.find((c) => c.name.toLowerCase() === n) ?? (aliased ? this.ctx.characters.find((c) => c.id === aliased) : undefined)
+      ?? this.ctx.characters.find((c) => c.name.toLowerCase().split(' ')[0] === n.split(' ')[0]);
   }
   name(id: string) { return this.ctx.characters.find((c) => c.id === id)?.name ?? this.ctx.store.getCharacter(id)?.name ?? id; }
   inConversation(id: string) { return Boolean(this.ctx.interaction?.participantIds.includes(id)); }

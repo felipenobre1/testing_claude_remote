@@ -25,6 +25,7 @@ import { resolveDecision, type Resolution } from './decision.ts';
 import { seededRng, type RngFactory } from './random.ts';
 import { runWorldTurn } from './world.ts';
 import { backgroundOf, bibleText, compileDraft, createGameFromSeed, worldLine } from './worldSeed.ts';
+import { languageName } from '../i18n.ts';
 import { beatDue, beatProblems, beatSystemPrompt, beatUserPrompt, linesProblems, localized, NarrationParseSchema, NarrationSchema, narrationProblems, narratorSystemPrompt, narratorUserPrompt, SceneBeatParseSchema, SceneBeatSchema, type Narration, type NarratorInput, type SceneBeat } from './story.ts';
 import type { WorldSeed } from '../domain/world.ts';
 import type { GamePack } from '../packs/types.ts';
@@ -107,7 +108,7 @@ export class Engine {
   newGame(opts: { playerName?: string; language?: string } = {}) {
     const t = this.pack.worldCreation.template;
     let draft = opts.playerName ? { ...t, player: { ...t.player, name: opts.playerName } } : t;
-    if (opts.language) draft = { ...draft, style: { ...draft.style, language: opts.language } };
+    if (opts.language) draft = { ...draft, style: { ...draft.style, language: languageName(opts.language) } };
     const { seed, problems } = compileDraft(draft, [this.pack], { now: this.now() });
     if (!seed) throw new Error(`the pack template does not compile: ${problems.join('; ')}`);
     return createGameFromSeed(this.store, this.pack, seed, this.now());
@@ -304,6 +305,8 @@ export class Engine {
 
     // Player mechanics (money, company, equity, promises) — deterministic, checked against real balances.
     if (pending) econCtx.characters = [...everyone, pending.character];
+    // Actions may still name the person by the label the player used ("o estudante mais velho"); it means whoever that turned out to be.
+    if (target && targetName && !sameName(targetName, target.name)) econCtx.aliases = { [targetName]: target.id };
     econCtx.interaction = interaction;
     econCtx.gameTime = t1;
     econCtx.location = location;
@@ -505,6 +508,7 @@ export class Engine {
         people: [...new Set([...(interaction?.participantIds ?? []), ...plan.scene.activeCharacterIds])].filter((id) => id !== player.id)
           .map((id) => economy.ctx.characters.find((c) => c.id === id) ?? plan.extraCharacters.find((x) => x.character.id === id)?.character)
           .filter((c): c is Character => Boolean(c)).map((c) => `${c.name} (${c.role}${c.gender ? `, ${c.gender}` : ''})`),
+        newPeople: pending ? [`${pending.character.name} (${pending.character.role}${pending.character.gender ? `, ${pending.character.gender}` : ''}) — ${pending.character.personality}`] : [],
         words, conversationEnded, choice: economy.ctx.player.status === 'dead' ? `None — ${player.name} is dead. Write the death; this is the last passage of the story.` : beat?.choice ?? null, previousIdeas, previousPassage: lastResponse?.narration || undefined,
         resultLines: localized(world.ctx.language) ? results : [],
       });

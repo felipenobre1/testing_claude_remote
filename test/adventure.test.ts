@@ -681,3 +681,31 @@ test('playtest replay: at the surgeon\'s, talking to him is face to face — nev
   assert.match(s.llm.callsFor('npc_turn')[0]!.system, /Never invent new facts about them \(a hidden fragment, poison/);
   s.store.close();
 });
+
+test('playtest replay: looking for "an older student" — the narrator introduces the stranger, the persuasion reaches him, `--lang pt` is Portuguese', async () => {
+  const store = new Store(tmpDbPath());
+  const llm = new ScriptedProvider();
+  const engine = new Engine(store, llm, { pack: adventurePack, rng: fixedRng(1), beats: false, narrator: true });
+  const { game } = engine.newGame({ language: 'pt' });
+  assert.match(formatStatusLine(store, game.id), /^── qui\., 11 de mar\., /); // the interface is Portuguese too
+  const student = {
+    name: 'Tomas Venn', age: 19, gender: 'male', role: 'older student', occupation: 'student', background: 'Third year, passed admissions twice.',
+    personality: 'Easy smile, books under his arm, likes to sound wise.', traits: ['friendly', 'vain'], values: ['learning'], goals: ['Pass his exams'], fears: ['Failing'],
+    location: 'Ashkar', relationshipToPlayer: 'A stranger.',
+  };
+  llm.enqueue('interpret', interp({ intents: ['start_conversation', 'speak'], target: { name: 'um estudante mais velho', relationHint: 'someone who knows the admissions' }, channel: 'in_person',
+    spokenText: 'Dizem que os Mestres adoram perguntas difíceis...',
+    actions: [{ action: 'influence', target: 'o estudante mais velho', approach: 'charm', goal: 'get tips about admissions without asking', difficulty: 2, bribe: null }] }))
+    .enqueue('generate_character', student)
+    .enqueue('npc_turn', npc({ dialogue: 'Às vezes querem saber se você admite que não sabe.' }))
+    .enqueue('narrate', (req: { user: string }) => ({ prose: 'Um rapaz de terceiro ano, livros debaixo do braço, para ao seu lado. «Às vezes querem saber se você admite que não sabe.»', suggestions: [],
+      lines: [...req.user.matchAll(/^\d+\. (.*)$/gm)].map((m) => m[1]!) }));
+  const r = await engine.takeTurn({ gameId: game.id, input: 'procuro alguém que dê dicas sem perguntar' });
+  assert.equal(r.status, 'committed', r.error ?? '');
+  assert.match(r.results.join('\n'), /🗣 Charm Tomas Venn \(get tips about admissions without asking\): Tomas Venn is won over/); // the label meant him
+  const narr = llm.callsFor('narrate').at(-1)!;
+  assert.match(narr.user, /MET FOR THE FIRST TIME THIS TURN \(the reader has never seen them before\):\n- Tomas Venn \(older student, male\) — Easy smile/);
+  assert.match(narr.system, /Never write as if a conversation were already under way\. The reader learns their name only when it is given/);
+  store.close();
+});
+
