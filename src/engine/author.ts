@@ -80,7 +80,7 @@ export class Author {
       const private_ = this.store.listKnowledgeOf(c.id).map((k) => k.belief);
       const memories = this.store.listMemoriesOwnedBy(c.id).slice(-8).map((m) => m.summary);
       return [
-        `- ${c.name}${c.gender ? ` (${c.gender})` : ''} — ${c.role}. ${c.background}${c.personality && c.personality !== c.background ? ` Personality: ${c.personality}` : ''}${c.goals.length ? ` Wants: ${c.goals.join('; ')}.` : ''}`,
+        `- ${c.name}${c.gender ? ` (${c.gender})` : ''} — ${c.isPlayer ? c.occupation ?? 'the protagonist' : c.role}. ${c.background}${c.personality && c.personality !== c.background ? ` Personality: ${c.personality}` : ''}${c.goals.length ? ` Wants: ${c.goals.join('; ')}.` : ''}`,
         ...(c.isPlayer ? facts.map((f) => `    · ${f.value}`) : []),
         ...private_.map((k) => `    · knows (privately): ${k}`),
         ...memories.map((m) => `    · remembers: ${m}`),

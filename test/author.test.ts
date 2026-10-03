@@ -29,8 +29,10 @@ test('the story bible: the author\'s whole truth — rules, hidden truths, what 
   const bible = author.bible(gameId);
   assert.match(bible, /There is no forgiveness for the fallen: since the Cross they are doomed/);
   assert.match(bible, /HIDDEN TRUTHS \(the reader discovers these slowly — never state them unless the author asks\):\n- The master wants every fallen angel gathered/);
-  assert.match(bible, /- Kokabiel \(male\) — one of the master's faithful\.[\s\S]*knows \(privately\): Kokabiel and Malariel were close in Heaven/);
-  assert.match(bible, /- Sariel \(male\)[\s\S]*Corrupted directly by the master[\s\S]*two "hounds" — a mystery/);
+  assert.match(bible, /- Kokabiel — one of the master's faithful\.[\s\S]*knows \(privately\): Kokabiel and Malariel were close in Heaven/);
+  assert.match(bible, /The fallen have no sex and no gender/);
+  assert.match(bible, /many of them receive the worship meant for God, pretending to come from Him/);
+  assert.match(bible, /- Sariel — a hunter[\s\S]*Corrupted directly by the master[\s\S]*two "hounds" — a mystery/);
   assert.match(bible, /PLAYER'S LANGUAGE: Brazilian Portuguese/);
   assert.equal(store.listGames()[0]!.packId, 'story');
   store.close();
