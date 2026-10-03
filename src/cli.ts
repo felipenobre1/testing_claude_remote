@@ -11,6 +11,8 @@ import { HttpPageFetcher } from './engine/web.ts';
 import { WorldCreation, type CreationResult } from './engine/creation.ts';
 import type { LLMProvider } from './llm/provider.ts';
 import { PACKS, packById } from './packs/index.ts';
+import { storyPack } from './packs/story/index.ts';
+import { Author } from './engine/author.ts';
 import { longDate, UI, uiLang, type UiLang } from './i18n.ts';
 import { upcoming } from './engine/planner.ts';
 import type { WorldSeed } from './domain/world.ts';
@@ -23,6 +25,8 @@ const USAGE = `Living Story Engine
   npm start -- new --quick [--pack startup|adventure|open] [--name Felipe] [--lang pt]
                                             skip the conversation: start the pack's example world
   npm start -- continue [gameId]            continue a game (default: most recent)
+  npm start -- write --new [--title "…"]    AUTHOR MODE: start a book (the story pack's bible: fallen angels in Rome)
+  npm start -- write [bookId]               continue writing a book (default: the most recent)
   npm start -- games                        list games
   npm start -- drafts                       list world drafts
   npm start -- export [gameId] [--full]     write a playtest log to playtests/ (--full adds every prompt and model output)
@@ -47,7 +51,7 @@ function parseArgs(argv: string[]) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (['db', 'game', 'name', 'pack', 'lang'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
+      if (['db', 'game', 'name', 'pack', 'lang', 'title'].includes(key) && next !== undefined) { flags[key] = next; i++; } else flags[key] = true;
     } else positional.push(a);
   }
   return { flags, positional };
@@ -195,6 +199,75 @@ async function narratedOpening(engine: Engine, gameId: string, plain: string): P
   soon.push(...(seed?.deadlines ?? []).map((d) => `  ⚠ ${longDate(d.when, lang)} — ${UI[lang].deadline}`));
   const comingUp = soon.length ? `\n\n${UI[lang].comingUp}\n${soon.join('\n')}` : '';
   return streamed ? comingUp.replace(/^\n\n/, '\n') : `${place} — ${longDate(game.gameTime, lang)}\n\n${prose}${comingUp}`;
+}
+
+/** Author mode: the author describes a scene, the engine writes it; the author rewrites, accepts or discards it. */
+async function writeBook(reader: Reader, author: Author, store: Store, gameId: string) {
+  const title = () => store.getGame(gameId)!.title;
+  const help = [
+    'Descreva a cena: o que acontece, como deve parecer, o ambiente, quem está nela. O texto é escrito enquanto você lê.',
+    'Comandos:  /aceitar  ·  /reescrever <notas>  ·  /descartar  ·  /capitulo <título>  ·  /manuscrito  ·  /exportar  ·  /biblia  ·  /titulo <título>  ·  ? <pergunta>  ·  /sair',
+  ].join('\n');
+  console.log(`\n📖 ${title()} — capítulo ${author.currentChapter(gameId)}\n\n${help}\n`);
+  const run = async (label: string, job: (onProse: (d: string) => void) => Promise<{ title: string }>) => {
+    const sp = spinner(label, 'pt');
+    let started = false;
+    try {
+      const scene = await job((d) => { if (!started) { sp.stop(); started = true; stdout.write('\n'); } stdout.write(d); });
+      sp.stop();
+      console.log(`\n\n— rascunho: «${scene.title}» — /aceitar · /reescrever <notas> · /descartar\n`);
+    } catch (e) {
+      sp.stop();
+      console.log(`\n(não deu certo: ${(e as Error).message})\n`);
+    }
+  };
+  for (;;) {
+    const raw = await reader.next('✍  ');
+    if (raw === null) break;
+    const line = raw.trim();
+    if (!line) continue;
+    const cmd = line.match(/^\/(\S+)\s*([\s\S]*)$/);
+    const name = cmd?.[1]?.toLowerCase();
+    const arg = cmd?.[2]?.trim() ?? '';
+    if (name === 'sair' || name === 'quit' || name === 'exit') break;
+    if (name === 'ajuda' || name === 'help') { console.log(help); continue; }
+    if (name === 'aceitar' || name === 'accept') {
+      try { const s = author.accept(gameId); console.log(`\n✓ «${s.title}» entrou no livro (capítulo ${s.chapter}, cena ${s.seq}).\n`); } catch (e) { console.log((e as Error).message); }
+      continue;
+    }
+    if (name === 'descartar' || name === 'discard') { console.log(author.discard(gameId) ? 'Rascunho descartado.' : 'Não há rascunho.'); continue; }
+    if (name === 'reescrever' || name === 'rewrite') {
+      if (!arg) { console.log('Diga o que mudar: /reescrever <notas>'); continue; }
+      await run('reescrevendo', (on) => author.rewrite(gameId, arg, on));
+      continue;
+    }
+    if (name === 'capitulo' || name === 'capítulo' || name === 'chapter') {
+      if (!arg) { console.log('Dê um título: /capitulo <título>'); continue; }
+      console.log(`\nCapítulo ${author.newChapter(gameId, arg)} — ${arg}\n`);
+      continue;
+    }
+    if (name === 'titulo' || name === 'título' || name === 'title') {
+      if (arg) store.run('UPDATE games SET title = :t WHERE id = :id', { t: arg, id: gameId });
+      console.log(`Título: ${title()}`);
+      continue;
+    }
+    if (name === 'manuscrito' || name === 'manuscript') { console.log(`\n${author.manuscript(gameId, title())}\n`); continue; }
+    if (name === 'exportar' || name === 'export') {
+      mkdirSync('books', { recursive: true });
+      const file = `books/${title().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || gameId}.md`;
+      writeFileSync(file, author.manuscript(gameId, title()));
+      console.log(`Manuscrito salvo em ${file}`);
+      continue;
+    }
+    if (name === 'biblia' || name === 'bíblia' || name === 'bible') { console.log(`\n${author.bible(gameId)}\n`); continue; }
+    const question = line.match(/^(?:\?|\/pergunta\b|\/ask\b)\s*([\s\S]+)$/i);
+    if (question) {
+      try { console.log(`\n📜 ${await working('pensando', author.ask(gameId, question[1]!), 'pt')}\n`); } catch (e) { console.log((e as Error).message); }
+      continue;
+    }
+    if (cmd) { console.log(`Comando desconhecido. ${help}`); continue; }
+    await run('escrevendo a cena', (on) => author.write(gameId, line, on));
+  }
 }
 
 const langOf = (store: Store, gameId: string) => uiLang(store.getWorldSeed<WorldSeed>(gameId)?.style.language);
@@ -354,6 +427,21 @@ async function main() {
       const file = `playtests/${gameId}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.md`;
       writeFileSync(file, exportPlaytest(store, gameId, { full: Boolean(flags.full) }));
       console.log(`Wrote ${file}. To share it: git add playtests && git commit -m "playtest" && git push`);
+    } else if (cmd === 'write') {
+      const books = store.listGames().filter((g) => g.packId === 'story');
+      const llm = liveLLM();
+      if (!llm) return;
+      let gameId = flags.new ? undefined : rest[0] ?? books[0]?.id;
+      if (!gameId) {
+        const engine = liveEngine(store, storyPack, llm); // creates the book from the story pack's bible
+        gameId = engine.newGame({ language: (flags.lang as string | undefined) ?? 'pt' }).game.id;
+        if (flags.title) store.run('UPDATE games SET title = :t WHERE id = :id', { t: String(flags.title), id: gameId });
+      } else if (!store.getGame(gameId) || store.getGame(gameId)!.packId !== 'story') {
+        return console.error(`No book ${gameId}. Start one with: npm start -- write --new`);
+      } else {
+        store.migratePack(storyPack.id, storyPack.migrations);
+      }
+      await writeBook(reader(), new Author(store, llm), store, gameId);
     } else if (cmd === 'drafts') {
       console.log(store.listDrafts().map((d) => `${d.id}  ${d.status}  v${d.version}  ${d.updatedAt}${d.gameId ? `  → ${d.gameId}` : ''}`).join('\n') || '(no drafts)');
     } else if (cmd === 'inspect') {

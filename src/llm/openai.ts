@@ -39,6 +39,8 @@ export class OpenAIProvider implements LLMProvider {
       scene_beat: (process.env.OPENAI_EFFORT_BEAT as Effort) ?? 'medium',
       narrate: (process.env.OPENAI_EFFORT_NARRATE as Effort) ?? 'medium',
       game_master: (process.env.OPENAI_EFFORT_GM as Effort) ?? 'low',
+      write_scene: (process.env.OPENAI_EFFORT_WRITE as Effort) ?? 'medium',
+      author_ask: (process.env.OPENAI_EFFORT_AUTHOR_ASK as Effort) ?? 'low',
       ...opts.effort,
     };
   }
@@ -57,14 +59,16 @@ export class OpenAIProvider implements LLMProvider {
       if (req.onText) {
         // Streaming: text deltas go to the caller as they arrive; the final response is checked like any other.
         let final: OpenAI.Responses.Response | null = null;
+        let streamed = '';
         for await (const ev of await this.client.responses.create({ ...params, stream: true })) {
-          if (ev.type === 'response.output_text.delta') req.onText(ev.delta);
+          if (ev.type === 'response.output_text.delta') { streamed += ev.delta; req.onText(ev.delta); }
           else if (ev.type === 'response.completed' || ev.type === 'response.incomplete') final = ev.response;
           else if (ev.type === 'response.failed') throw new LLMError('failed', ev.response.error?.message ?? 'response failed');
           else if (ev.type === 'error') throw new LLMError('stream', ev.message);
         }
         if (!final) throw new LLMError('stream', 'the stream ended without a response');
-        res = final;
+        // A streamed response carries no output_text (the SDK only adds it to non-streamed ones): it is the text that streamed.
+        res = { ...final, output_text: final.output_text || outputText(final) || streamed };
       } else {
         res = await this.client.responses.create(params);
       }
@@ -88,4 +92,9 @@ export class OpenAIProvider implements LLMProvider {
     }
     return { rawText: res.output_text, model: res.model, meta };
   }
+}
+
+/** The text of a response's message output (what output_text holds on non-streamed responses). */
+function outputText(r: OpenAI.Responses.Response): string {
+  return r.output.flatMap((item) => (item.type === 'message' ? item.content.flatMap((c) => (c.type === 'output_text' ? [c.text] : [])) : [])).join('');
 }

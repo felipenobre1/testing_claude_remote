@@ -88,6 +88,16 @@ These are generic engine features. Each world sets them at creation (`style.pace
 - **Protection.** Attacking someone guarded means fighting the guards first (`fight.guards`). Only when they are down does the one they protect enter the fight, and trying to kill makes the guards fight to kill.
 - **People attack you.** In a conversation, an NPC can decide to attack (`attack`: intent, how dangerous they are, how). Scene beats can be attacks too: an ambush, someone you wronged, a hired blade. The attacker strikes first and a fight begins with the player on the back foot (`npcAttack`); someone who joins a fight already on is added to it.
 
+## Author mode: writing a book
+
+`npm start -- write --new --title "Os Caídos"` starts a book; `npm start -- write` continues the latest one. You are the author, not a character: you describe a scene — what happens, how it should feel, the atmosphere, who is in it — and the engine writes it in full, in the book's voice, as you read (the text streams). Nothing is canon until you accept it.
+
+- `/reescrever <notas>` rewrites the draft with your notes, keeping what they don't touch; `/aceitar` puts it in the book; `/descartar` throws it away.
+- `/capitulo <título>` starts a chapter; `/manuscrito` shows the book; `/exportar` writes it to `books/<título>.md`; `/titulo` renames it.
+- `/biblia` shows the story bible; `? <pergunta>` asks about the story (who knows what, what happened) — you may know everything.
+- The writer works from the **story bible** (world, rules, hidden truths) and from **what each character knows** — a secret one holds never surfaces in another's mind. Accepted scenes are remembered by the characters who were there; new people the scene introduces become part of the story.
+- The first book's bible (the `story` pack): fallen angels in present-day Rome, during Holy Week — Sariel the hunter, Kokabiel of the master's faithful, and Malariel, who has hidden from everyone for centuries. Written in Brazilian Portuguese, third person.
+
 ## Mysteries: hidden truths, clues and deadlines
 
 A world can decide its secrets at creation, so a mystery can't drift into "whoever you accuse did it":
