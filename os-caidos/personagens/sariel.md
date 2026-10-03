@@ -16,7 +16,7 @@
 
 ## Passado
 - [AUTOR] Foi **corrompido diretamente pelo mestre:** faz o que ele manda e não se importa.
-- [AUTOR] Caça com **dois "cães"**. Um mistério: nunca nomeados, descritos ou explicados até o autor decidir. O autor revelará no começo do livro.
+- [AUTOR] Caça com **dois "cães"** — caídos tão corrompidos que viraram feras (ver bíblia, "Os cães"). Nunca nomeados nem explicados ao leitor até o autor decidir.
 
 ## Na história
 _(vazio)_

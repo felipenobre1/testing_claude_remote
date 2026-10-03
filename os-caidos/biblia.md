@@ -25,6 +25,14 @@ Uma saga. Este é o começo.
 6. **Corrupção:** podem corromper uns aos outros. Quanto mais corrompido, mais um caído se torna **como um animal**: selvagem, muito poderoso, e **domesticável** por outros caídos.
 7. **Sem sexo nem gênero.** Na aparência humana, não são homem nem mulher — belos de um jeito que inquieta. Quem os vê não sabe dizer depois se viu um homem ou uma mulher. No texto: masculino gramatical de "o anjo" / "o caído", nunca descritos como homens ou mulheres.
 
+## Os cães [AUTOR]
+
+- Caídos **tão corrompidos** que viraram feras. Os caçadores os usam para encontrar os isolados.
+- **O mal deles vaza para o mundo natural**, inevitavelmente: quando um cão passa, a luz enfraquece e pisca, o ar esfria (humanos chegam a *sentir* gelo que não existe), crianças choram no sono, adultos são tomados de angústia sem motivo.
+- Uma vez solto, um cão **se alimenta do sofrimento** de quem encontra sozinho no seu caminho. **O sofrimento não vem do nada: já está dentro do homem, sempre esteve — desde o Éden.** O cão só o faz subir à tona: a culpa, o remorso, a raiva.
+- O que o cão faz **passa**; parte do que ele deixa **fica** (luzes acesas, crianças chorando), e o humano quase nunca percebe.
+- Nunca nomeados nem explicados ao leitor até o autor decidir.
+
 ## O mestre ("você sabe quem")
 
 - Quase sempre **fora de cena**: sentido pela pressão, pelo medo, pelas ordens.
